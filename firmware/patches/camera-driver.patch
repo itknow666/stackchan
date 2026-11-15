@@ -1,0 +1,38 @@
+--- a/managed_components/espressif__esp_cam_sensor/src/driver_dvp/esp_cam_ctlr_dvp_cam.c
++++ b/managed_components/espressif__esp_cam_sensor/src/driver_dvp/esp_cam_ctlr_dvp_cam.c
+@@ -881,6 +881,10 @@
+     ctlr->fb_size_in_bytes = fb_size_in_bytes;
+     ctlr->dvp_fsm = DVP_CAM_FSM_INIT;
+ 
++    /* Dania: an ISR may run immediately when its GPIO handler is installed. */
++    ctlr->event_queue = xQueueCreate(DVP_CAM_EVENT_QUEUE_SIZE, sizeof(dvp_cam_event_t));
++    ESP_GOTO_ON_FALSE(ctlr->event_queue, ESP_ERR_NO_MEM, fail2, TAG, "failed to create event queue");
++
+     /* Ignore result if this calling fails, maybe users call this in previous step */
+ 
+     gpio_install_isr_service(ESP_INTR_FLAG_LOWMED | ESP_INTR_FLAG_IRAM);
+@@ -909,8 +913,6 @@
+     };
+     ESP_GOTO_ON_ERROR(gdma_register_rx_event_callbacks(ctlr->dma_chan, &cbs, ctlr), fail5, TAG, "failed to register DMA event callbacks");
+ 
+-    ctlr->event_queue = xQueueCreate(DVP_CAM_EVENT_QUEUE_SIZE, sizeof(dvp_cam_event_t));
+-    ESP_GOTO_ON_FALSE(ctlr->event_queue, ESP_ERR_NO_MEM, fail5, TAG, "failed to create event queue");
+ 
+     ctlr->base.del = dvp_cam_ctlr_del;
+     ctlr->base.enable = dvp_cam_ctlr_enable;
+@@ -933,7 +935,6 @@
+     return ESP_OK;
+ 
+ fail6:
+-    vQueueDelete(ctlr->event_queue);
+ fail5:
+     dvp_dma_deinit(ctlr->dma_chan);
+ fail4:
+@@ -941,6 +942,7 @@
+ fail3:
+     gpio_isr_handler_remove(ctlr->vsync_pin);
+ fail2:
++    if (ctlr->event_queue) vQueueDelete(ctlr->event_queue);
+     heap_caps_free(ctlr->dma_desc);
+ fail1:
+     heap_caps_free(ctlr->dma_buffer);

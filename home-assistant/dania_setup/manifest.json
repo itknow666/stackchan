@@ -1,0 +1,1 @@
+{"domain":"dania_setup","name":"达妮娅本机配置","version":"1.0.0","documentation":"https://www.home-assistant.io/integrations/mqtt/","codeowners":[],"requirements":[],"after_dependencies":["mqtt"],"iot_class":"local_push"}

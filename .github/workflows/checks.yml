@@ -1,0 +1,40 @@
+name: Source checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  firmware-logic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S firmware/tests -B build-host-tests
+      - run: cmake --build build-host-tests
+      - run: ctest --test-dir build-host-tests --output-on-failure
+      - run: git diff --check
+  bridge:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r home-assistant/requirements.txt
+      - run: python home-assistant/test-bridge.py
+      - run: python home-assistant/build-dashboard.py
+  cloud:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud/stackchan-server/server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cloud/stackchan-server/server/go.mod
+          cache-dependency-path: cloud/stackchan-server/server/go.sum
+      - run: python -m unittest discover -s tests
+        working-directory: cloud
+      - run: sudo apt-get update && sudo apt-get install -y libopus-dev libopusfile-dev pkg-config
+      - run: go test ./...
+      - run: go build ./...
+      - run: bash -n ../run.sh && bash -n ../standalone.sh

@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "sample_rate": 24000,
+  "channels": 1,
+  "encoding": "pcm_s16le",
+  "aliases": ["达妮娅"],
+  "rules": [
+    {"file": "praise.pcm", "reply": "哼 今天也很努力嘛", "triggers": ["夸夸我", "表扬我"]}
+  ]
+}

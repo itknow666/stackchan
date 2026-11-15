@@ -1,0 +1,16 @@
+{
+  "mqtt_host": "127.0.0.1",
+  "mqtt_port": 1883,
+  "mqtt_user": "stackchan",
+  "mqtt_password": "replace-with-your-local-password",
+  "voice_pack_dir": "voice-pack",
+  "cloud": {
+    "enabled": false,
+    "host": "your-server.example.com",
+    "user": "stackchan-admin",
+    "identity_file": "~/.ssh/stackchan",
+    "known_hosts_file": "~/.ssh/known_hosts",
+    "manifest_path": "/opt/stackchan/data/voice-pack/manifest.json",
+    "service": "stackchan"
+  }
+}
