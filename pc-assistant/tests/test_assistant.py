@@ -123,6 +123,25 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(not value["ok"] for value in self.responses))
         self.assertEqual(self.executor.calls, [])
 
+    async def test_nonprintable_search_queries_never_reach_executor(self):
+        invalid = ["query\x7f", "query\u202e", "query\u200b", "query\u00a0",
+                   "query\u2028", "query\x00"]
+        for index, query in enumerate(invalid):
+            await self.dispatcher.accept(call(str(index), action="search_web", args={"query": query}))
+        await self.settle()
+        self.assertEqual(self.executor.calls, [])
+        self.assertEqual(len(self.responses), len(invalid))
+        self.assertTrue(all(not response["ok"] for response in self.responses))
+
+        valid = ["普通中文", "English query", " 中文 English with ASCII spaces "]
+        for index, query in enumerate(valid):
+            await self.dispatcher.accept(call("valid-" + str(index), action="search_web",
+                                              args={"query": query}))
+            await self.settle()
+        self.assertEqual(self.executor.calls,
+                         [("search_web", {"query": query}) for query in valid])
+        self.assertTrue(all(response["ok"] for response in self.responses[len(invalid):]))
+
     async def test_duplicate_running_and_completed_ids_do_not_replay(self):
         self.executor.gate = asyncio.Event()
         await self.dispatcher.accept(call())

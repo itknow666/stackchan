@@ -157,8 +157,8 @@ func validatePCAction(c pcCapabilities, action string, args map[string]any) erro
 			return errors.New("computer search query must contain one to three hundred characters")
 		}
 		for _, ch := range query {
-			if unicode.IsControl(ch) {
-				return errors.New("computer search query contains control characters")
+			if !unicode.IsPrint(ch) {
+				return errors.New("computer search query contains non-printable characters")
 			}
 		}
 	}

@@ -30,7 +30,7 @@ def validate_action(config: Config, action, args):
     elif action == "search_web":
         query = args["query"]
         if (not isinstance(query, str) or not 1 <= len(query.strip()) <= 300 or
-                any(ord(c) < 32 for c in query)):
+                not query.isprintable()):
             raise ValueError("Search query must contain 1 to 300 printable characters")
 
 

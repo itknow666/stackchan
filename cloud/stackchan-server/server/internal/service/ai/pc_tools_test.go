@@ -86,3 +86,30 @@ func TestPCStrictJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPCSearchRejectsNonPrintableBeforeRelay(t *testing.T) {
+	r, s := newPCTestServer(t)
+	conn := pcConnect(t, r, s)
+	control := pcControlFor(r, "robot-allowed")
+	for _, query := range []string{"query\x7f", "query\u202e", "query\u200b", "query\u00a0", "query\u2028", "query\x00"} {
+		if _, err := control.dispatch(context.Background(), &pcTurn{}, "pc_search_web", map[string]any{"query": query}); err == nil {
+			t.Fatalf("non-printable query accepted: %q", query)
+		}
+	}
+	for _, query := range []string{"普通中文", "English query", " 中文 English with ASCII spaces "} {
+		done := make(chan error, 1)
+		go func() {
+			_, err := control.dispatch(context.Background(), &pcTurn{}, "pc_search_web", map[string]any{"query": query})
+			done <- err
+		}()
+		// An invalid earlier query would be observed here before this valid one.
+		call := pcReadCall(t, conn)
+		if call["action"] != "search_web" || call["args"].(map[string]any)["query"] != query {
+			t.Fatalf("unexpected query reached the computer: %v", call)
+		}
+		pcReply(t, conn, call, true, map[string]any{"simulated": true})
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
