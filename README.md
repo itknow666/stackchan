@@ -34,7 +34,8 @@
 ## 快速验证
 
 ```sh
-cmake -S firmware/tests -B build-host-tests
+python3 firmware/tests/fetch_host_dependency.py /tmp/stackchan-host-arduinojson
+cmake -S firmware/tests -B build-host-tests -DARDUINOJSON_INCLUDE_DIR=/tmp/stackchan-host-arduinojson/src
 cmake --build build-host-tests
 ctest --test-dir build-host-tests --output-on-failure
 ```

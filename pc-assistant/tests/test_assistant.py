@@ -53,7 +53,7 @@ class ValidationTests(unittest.TestCase):
             path.write_text(json.dumps(data))
             config = load_config(path)
             self.assertTrue(config.dry_run)
-            self.assertEqual(config.state_file, path.parent / "private/status.json")
+            self.assertEqual(config.state_file, path.resolve().parent / "private/status.json")
             self.assertEqual(config.hello()["capabilities"]["apps"], [])
             for endpoint in ("ws://example.com/dania/pc/ws", "wss://user:pw@example.com/dania/pc/ws",
                              "wss://example.com/other", "wss://example.com/dania/pc/ws?token=x"):
@@ -382,7 +382,7 @@ class StartupTests(unittest.TestCase):
                 startup.main()
             entry = root / "Microsoft/Windows/Start Menu/Programs/Startup/DaniaPcAssistant.vbs"
             text = entry.read_text(encoding="utf-16")
-            self.assertIn(str(config), text)
+            self.assertIn(str(config.resolve()), text)
             self.assertNotIn("private-test-value", text)
             with patch.dict("os.environ", {"APPDATA": directory}), patch("sys.argv", ["startup.py", "remove"]):
                 startup.main()
