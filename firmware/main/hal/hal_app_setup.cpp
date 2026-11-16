@@ -22,7 +22,7 @@
     {
         Settings settings("warm_boot", true);
         settings.SetInt("app_setup", 1);
-        settings.SetInt("app_index", 6);
+        settings.SetInt("app_index", -1);
     }
     esp_restart();
 }

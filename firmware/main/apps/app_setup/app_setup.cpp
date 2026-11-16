@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_setup.h"
-#include "workers/feature_toggle.h"
 #include <hal/hal.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -42,6 +41,7 @@ void AppSetup::onOpen()
     _destroy_menu    = false;
     _need_warm_reset = false;
     _magic_count     = 0;
+    _closed          = false;
 
     _menu_sections = {
         {
@@ -143,21 +143,13 @@ void AppSetup::onOpen()
                 //   }}
             },
         },
-        {
-            "Apps",
-            {{"App visibility",
-              [&]() {
-                  _destroy_menu = true;
-                  _worker       = std::make_unique<FeatureToggleWorker>();
-              }}},
-        },
     };
 
     LvglLockGuard lock;
 
     _menu_page = std::make_unique<view::SelectMenuPage>(_menu_sections);
 
-    view::create_home_indicator([&]() { close(); });
+    view::create_home_indicator([&]() { _closed = true; });
     view::create_status_bar();
 }
 
@@ -201,7 +193,7 @@ void AppSetup::onClose()
     view::destroy_home_indicator();
     view::destroy_status_bar();
 
-    if (_need_warm_reset) {
-        GetHAL().requestWarmReboot(6);
-    }
+    // Settings and provisioning may have started audio/network helpers. Always
+    // return through a clean Agent boot rather than retaining maintenance state.
+    GetHAL().reboot();
 }

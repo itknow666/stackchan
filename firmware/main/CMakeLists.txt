@@ -10,9 +10,12 @@ if(CONFIG_LIBC_NEWLIB_NANO_FORMAT)
 endif()
 
 file(GLOB_RECURSE STACK_CHAN_SOURCES
-    "apps/*.c"
-    "apps/*.cc"
-    "apps/*.cpp"
+    "apps/common/*.c"
+    "apps/common/*.cc"
+    "apps/common/*.cpp"
+    "apps/app_setup/*.c"
+    "apps/app_setup/*.cc"
+    "apps/app_setup/*.cpp"
     "assets/*.c"
     "assets/*.cc"
     "assets/*.cpp"
@@ -23,10 +26,21 @@ file(GLOB_RECURSE STACK_CHAN_SOURCES
     "stackchan/*.cc"
     "stackchan/*.cpp"
 )
+# Standalone applications remain as upstream reference source, but are absent
+# from this Agent image together with their service implementations.
+list(FILTER STACK_CHAN_SOURCES EXCLUDE REGEX "/(feature_toggle|startup|hal_app_center|hal_ezdata|hal_espnow|hal_toggles|hal_ws_avatar)\\.(c|cc|cpp)$")
+list(FILTER STACK_CHAN_SOURCES EXCLUDE REGEX "/hal/utils/(espnow_radio|local_network|ota)/")
 set(STACK_CHAN_INCLUDE_DIRS
     "."
 )
 list(APPEND STACK_CHAN_SOURCES main.cpp)
+set(DANIA_SD_SEED_SOURCE "" CACHE FILEPATH "Optional private SD bootstrap source (never publish its binary)")
+if(DANIA_SD_SEED_SOURCE)
+    if(NOT IS_ABSOLUTE "${DANIA_SD_SEED_SOURCE}" OR NOT EXISTS "${DANIA_SD_SEED_SOURCE}")
+        message(FATAL_ERROR "DANIA_SD_SEED_SOURCE must be an existing absolute private source file")
+    endif()
+    list(APPEND STACK_CHAN_SOURCES "${DANIA_SD_SEED_SOURCE}")
+endif()
 
 # Define source files
 set(SOURCES "audio/audio_codec.cc"
@@ -328,13 +342,18 @@ idf_component_register(SRCS ${SOURCES}
                         bt
                         fatfs
                         ArduinoJson
-                        esp-now
                         mooncake
                         mooncake_log
                         smooth_ui_toolkit
                     )
 
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_23)
+option(DANIA_BOOT_CHIME "Play the ready sound after successful activation" ON)
+if(DANIA_BOOT_CHIME)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DANIA_BOOT_CHIME=1)
+else()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE DANIA_BOOT_CHIME=0)
+endif()
 # Embed a head-pet pack only when all ten locally supplied clips are present.
 set(DANIA_HEADPET_AUDIO 1)
 foreach(CLIP_ID 01 02 03 04 05 06 07 08 09 10)
@@ -423,7 +442,15 @@ endforeach()
 
 endif()
 
-set(DEFAULT_ASSETS_EXTRA_FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/assets_bin")
+# Retain only maintenance and Agent status resources in newly generated assets.
+# Existing devices' asset partitions do not need to be erased or rewritten.
+set(DEFAULT_ASSETS_EXTRA_FILES "${CMAKE_BINARY_DIR}/agent-assets-extra")
+file(MAKE_DIRECTORY "${DEFAULT_ASSETS_EXTRA_FILES}")
+foreach(ASSET icon_setup.bin setup_stackchan_front_view.bin icon_bat_lightning.bin
+    icon_bell.bin icon_home.bin icon_wifi_high.bin icon_wifi_low.bin icon_wifi_medium.bin icon_wifi_slash.bin)
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/assets/assets_bin/${ASSET}"
+                   "${DEFAULT_ASSETS_EXTRA_FILES}/${ASSET}" COPYONLY)
+endforeach()
 
 # Function to build default assets based on configuration
 function(build_default_assets_bin)

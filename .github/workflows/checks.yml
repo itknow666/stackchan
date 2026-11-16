@@ -7,7 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cmake -S firmware/tests -B build-host-tests
+      - run: python3 firmware/tests/fetch_host_dependency.py /tmp/stackchan-host-arduinojson
+      - run: cmake -S firmware/tests -B build-host-tests -DARDUINOJSON_INCLUDE_DIR=/tmp/stackchan-host-arduinojson/src
       - run: cmake --build build-host-tests
       - run: ctest --test-dir build-host-tests --output-on-failure
       - run: git diff --check

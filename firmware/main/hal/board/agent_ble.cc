@@ -1,6 +1,7 @@
 #include "agent_ble.h"
 #include "agent_ble_queue.h"
 #include "hal_bridge.h"
+#include "sd_voice.h"
 #include <hal/hal.h>
 #include <stackchan/stackchan.h>
 #include <esp_heap_caps.h>
@@ -23,6 +24,23 @@ static void handle_volume_command(const char* payload)
     ArduinoJson::JsonDocument doc;
     if (ArduinoJson::deserializeJson(doc, payload) || !doc["request_id"].is<uint32_t>()) return;
     const uint32_t request = doc["request_id"].as<uint32_t>();
+    if (doc["cmd"] == "getStorageInfo") {
+        const auto storage = voice_storage_info();
+        ArduinoJson::JsonDocument reply;
+        reply["cmd"] = "storage";
+        reply["request_id"] = request;
+        reply["mounted"] = storage.mounted;
+        reply["valid"] = storage.valid;
+        reply["pack_id"] = storage.pack_id;
+        reply["clips"] = storage.clips;
+        reply["total_mb"] = storage.total_bytes / (1024 * 1024);
+        reply["free_mb"] = storage.free_bytes / (1024 * 1024);
+        reply["error"] = storage.error;
+        std::string response;
+        ArduinoJson::serializeJson(reply,response);
+        stackchan_ble_notify_config(response.data(),static_cast<uint16_t>(response.size()));
+        return;
+    }
     if (doc["cmd"] == "setVolume") {
         if (!doc["value"].is<int>()) return;
         const int volume = doc["value"].as<int>();

@@ -11,6 +11,7 @@
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
+#include <driver/gpio.h>
 #include <wifi_station.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -20,6 +21,7 @@
 #include <mutex>
 #include "stackchan_camera.h"
 #include "hal_bridge.h"
+#include "sd_voice.h"
 #include <hal/hal.h>
 
 #define TAG "M5Stack-StackChan-Board"
@@ -232,10 +234,24 @@ public:
     void ResetAw88298()
     {
         ESP_LOGI(TAG, "Reset AW88298");
-        WriteReg(0x02, 0b00000011);
+        const uint8_t output = ReadReg(0x02);
+        WriteReg(0x02, output & ~(1u << 2));
         vTaskDelay(pdMS_TO_TICKS(10));
-        WriteReg(0x02, 0b00000111);
+        WriteReg(0x02, output | (1u << 2));
         vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
+    bool EnableSdPower()
+    {
+        uint8_t output = 0, config = 0;
+        if (TryReadRegs(0x02, &output, 1) != ESP_OK || TryReadRegs(0x04, &config, 1) != ESP_OK) return false;
+        // P0_4 is the SD power gate. Preserve speaker/reset/USB power bits.
+        const uint8_t set_output[] = {0x02, static_cast<uint8_t>(output | (1u << 4))};
+        const uint8_t set_config[] = {0x04, static_cast<uint8_t>(config & ~(1u << 4))};
+        if (i2c_master_transmit(i2c_device_, set_output, sizeof(set_output), 100) != ESP_OK ||
+            i2c_master_transmit(i2c_device_, set_config, sizeof(set_config), 100) != ESP_OK) return false;
+        vTaskDelay(pdMS_TO_TICKS(20));
+        return true;
     }
 
     void ResetIli9342()
@@ -566,7 +582,9 @@ private:
     {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num      = GPIO_NUM_37;
-        buscfg.miso_io_num      = GPIO_NUM_NC;
+        // GPIO35 is also LCD D/C. IDF6.1's esp_lcd SPI pre/post callbacks
+        // enable output only for LCD transactions and release it afterwards.
+        buscfg.miso_io_num      = GPIO_NUM_35;
         buscfg.sclk_io_num      = GPIO_NUM_36;
         buscfg.quadwp_io_num    = GPIO_NUM_NC;
         buscfg.quadhd_io_num    = GPIO_NUM_NC;
@@ -685,6 +703,11 @@ public:
         InitializeFt6336();
         InitializeSpi();
         InitializeIli9342Display();
+        // Hold the card deselected before powering it, so its MISO cannot
+        // contend with the LCD D/C output during the initial mount interval.
+        const bool sd_cs_ready = gpio_set_level(GPIO_NUM_4, 1) == ESP_OK &&
+                                 gpio_set_direction(GPIO_NUM_4, GPIO_MODE_OUTPUT) == ESP_OK;
+        dania::initialize_sd_voice(sd_cs_ready && aw9523_->EnableSdPower());
         // This voice + BLE variant does not use vision. A live camera reserves
         // scarce internal DMA RAM even when nobody requests a frame.
         ESP_LOGI(TAG, "Dania: camera capture disabled to reserve internal RAM for Agent + BLE");

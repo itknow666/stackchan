@@ -20,4 +20,13 @@ int main()
     wrap.select(UINT32_MAX - 1000, 0);
     assert(!wrap.ready(1000, true));
     assert(wrap.ready(6000, true));
+    dania::HeadPetVoicePolicy small;
+    unsigned old=small.select(0,999,3);
+    for(uint32_t i=1;i<100;++i) {
+        const auto next=small.select(i*6000,i,3);
+        assert(next<3 && next!=old);
+        old=next;
+    }
+    assert(small.select(600000,10,1)==0);
+    assert(small.select(606000,10,0)==0);
 }

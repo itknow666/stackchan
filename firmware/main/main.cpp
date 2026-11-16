@@ -7,9 +7,9 @@
 #include <uitk/short_namespace.hpp>
 #include <mooncake_log.h>
 #include <mooncake.h>
-#include <apps/apps.h>
+#include <apps/app_setup/app_setup.h>
 #include <hal/hal.h>
-#include <hal/hal_toggles.h>
+#include <hal/board/agent_boot_policy.h>
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
@@ -26,37 +26,26 @@ extern "C" void app_main(void)
     // Setup ui hal
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
     ui_hal::on_get_tick([]() { return GetHAL().millis(); });
+    {
+        LvglLockGuard lock;
+        GetHAL().bootLogo.reset();
+    }
 
-    const bool skip_mooncake = GetHAL().getXiaozhiConfig().startAiAgentOnBoot && GetHAL().getWarmRebootTarget() < 0;
-
-    if (!skip_mooncake) {
-        // Install apps
-        GetMooncake().installApp(std::make_unique<AppLauncher>());
-        hal_toggles::register_app_id(hal_toggles::App::AiAgent,
-                                     GetMooncake().installApp(std::make_unique<AppAiAgent>()));
-        hal_toggles::register_app_id(hal_toggles::App::Avatar, GetMooncake().installApp(std::make_unique<AppAvatar>()));
-        hal_toggles::register_app_id(hal_toggles::App::EspnowRemote,
-                                     GetMooncake().installApp(std::make_unique<AppEspnowControl>()));
-        hal_toggles::register_app_id(hal_toggles::App::AppCenter,
-                                     GetMooncake().installApp(std::make_unique<AppAppCenter>()));
-        hal_toggles::register_app_id(hal_toggles::App::Ezdata, GetMooncake().installApp(std::make_unique<AppEzdata>()));
-        hal_toggles::register_app_id(hal_toggles::App::Dance, GetMooncake().installApp(std::make_unique<AppDance>()));
-        GetMooncake().installApp(std::make_unique<AppSetup>());
-
-        // Main loop
-        while (1) {
+    const auto boot = dania::select_agent_boot(GetHAL().consumeAppSetupRequest(),
+        GetHAL().getXiaozhiConfig().startAiAgentOnBoot, GetHAL().getWarmRebootTarget());
+    GetHAL().clearWarmRebootRequest();
+    if (boot == dania::AgentBoot::Maintenance) {
+        // Mooncake is used only for the BLE provisioning extension. No app
+        // launcher, gallery, dance or radio-control app is installed.
+        AppSetup maintenance;
+        maintenance.onOpen();
+        while (!maintenance.isClosed()) {
             GetHAL().feedTheDog();
             GetHAL().updateHeapStatusLog();
-
             GetMooncake().update();
-
-            if (GetHAL().isXiaozhiStartRequested()) {
-                break;
-            }
+            maintenance.onRunning();
         }
-
-        // Uninstall all apps and destroy mooncake
-        GetMooncake().uninstallAllApps();
+        maintenance.onClose();
         DestroyMooncake();
     }
 

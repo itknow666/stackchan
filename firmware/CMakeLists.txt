@@ -7,7 +7,7 @@ if(CMAKE_GENERATOR MATCHES "^Ninja")
     set(CMAKE_NINJA_FORCE_RESPONSE_FILE TRUE CACHE INTERNAL "Use Ninja response files")
 endif()
 
-set(PROJECT_VER "1.6.2-dania-dual")
+set(PROJECT_VER "1.7.0-dania-agent-sd")
 add_definitions(-DFIRMWARE_VERSION=\"${PROJECT_VER}\")
 
 # Add this line to disable the specific warning
@@ -25,4 +25,5 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sdkconfig.defaults.local")
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+idf_build_set_property(MINIMAL_BUILD ON)
 project(stack-chan)

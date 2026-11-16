@@ -23,11 +23,6 @@
   {
     "url": "https://github.com/bblanchon/ArduinoJson.git",
     "path": "components/ArduinoJson",
-    "branch": "v7.4.2"
-  },
-  {
-    "url": "https://github.com/espressif/esp-now.git",
-    "path": "components/esp-now",
-    "branch": "c3b5f9be245f1a80db9cb938600566aa6a8dd1e5"
+    "branch": "733bc4ee82630c88c0a619a883cd3a206efae977"
   }
 ]

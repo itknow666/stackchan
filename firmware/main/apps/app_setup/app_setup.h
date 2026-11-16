@@ -23,6 +23,7 @@ public:
     void onOpen() override;
     void onRunning() override;
     void onClose() override;
+    bool isClosed() const { return _closed; }
 
 private:
     std::vector<view::SelectMenuPage::MenuSection> _menu_sections;
@@ -32,4 +33,5 @@ private:
     bool _destroy_menu    = false;
     bool _need_warm_reset = false;
     int _magic_count      = 0;
+    bool _closed = false;
 };

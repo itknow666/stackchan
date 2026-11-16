@@ -9,10 +9,12 @@ public:
     {
         return idle && (!_played || static_cast<uint32_t>(now - _last_tick) >= 6000);
     }
-    unsigned select(uint32_t now, uint32_t random)
+    unsigned select(uint32_t now, uint32_t random, unsigned count = 10)
     {
-        unsigned index = _played ? random % 9 : random % 10;
-        if (_played && index >= _last_index) ++index;
+        if (count == 0) return 0;
+        const bool exclude = _played && _last_index < count && count > 1;
+        unsigned index = random % (exclude ? count - 1 : count);
+        if (exclude && index >= _last_index) ++index;
         _played = true;
         _last_tick = now;
         _last_index = index;

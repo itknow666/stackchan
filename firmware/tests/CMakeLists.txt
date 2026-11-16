@@ -28,3 +28,24 @@ add_test(NAME agent_ble_queue_test COMMAND $<TARGET_FILE:agent_ble_queue_test>)
 add_executable(network_audio_prebuffer_test network_audio_prebuffer_test.cpp)
 target_compile_features(network_audio_prebuffer_test PRIVATE cxx_std_17)
 add_test(NAME network_audio_prebuffer_test COMMAND $<TARGET_FILE:network_audio_prebuffer_test>)
+
+# ArduinoJson is installed by the normal firmware dependency setup; no ESP SDK
+# is needed to exercise the exact manifest parser on a host.
+find_path(ARDUINOJSON_INCLUDE_DIR ArduinoJson.hpp
+    HINTS "${CMAKE_CURRENT_SOURCE_DIR}/../components/ArduinoJson/src")
+if(NOT ARDUINOJSON_INCLUDE_DIR)
+    message(FATAL_ERROR "Set ARDUINOJSON_INCLUDE_DIR to ArduinoJson/src (firmware dependency)")
+endif()
+add_executable(sd_voice_manifest_test sd_voice_manifest_test.cpp
+    ../main/hal/board/sd_voice_manifest.cc)
+target_include_directories(sd_voice_manifest_test PRIVATE ${ARDUINOJSON_INCLUDE_DIR})
+target_compile_features(sd_voice_manifest_test PRIVATE cxx_std_17)
+add_test(NAME sd_voice_manifest_test COMMAND $<TARGET_FILE:sd_voice_manifest_test>)
+add_executable(local_playback_lease_test local_playback_lease_test.cpp)
+target_compile_features(local_playback_lease_test PRIVATE cxx_std_17)
+add_test(NAME local_playback_lease_test COMMAND $<TARGET_FILE:local_playback_lease_test>)
+add_executable(sd_voice_file_test sd_voice_file_test.cpp
+    ../main/hal/board/sd_voice_file.cc ../main/hal/board/sd_voice_manifest.cc)
+target_include_directories(sd_voice_file_test PRIVATE ${ARDUINOJSON_INCLUDE_DIR})
+target_compile_features(sd_voice_file_test PRIVATE cxx_std_17)
+add_test(NAME sd_voice_file_test COMMAND $<TARGET_FILE:sd_voice_file_test>)
