@@ -103,7 +103,7 @@ func (p *pcControl) tools() []map[string]any {
 			props["task"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 4000}
 			required = []string{"project", "task"}
 			listing, _ := json.Marshal(c.Projects)
-			description = "Start a background Codex coding task ONLY when the user explicitly asks to give work to Codex. Allowed projects: " + string(listing) + ". Acceptance is not completion. Save the returned task_id; query status rather than submitting again. This is a dedicated worker session, not the existing desktop chat. No automatic push or deployment."
+			description = "Start a NEW visible Codex desktop chat ONLY when the user explicitly asks Codex to do a task. Allowed projects: " + string(listing) + ". Use profile by default when available. Each request creates a separate desktop chat in the configured workspace. The service preserves the current user's exact words and uses DeepSeek to clarify the task before submission. Never add constraints the user did not request, especially a prohibition on web research. Acceptance is not completion. Save task_id; query status rather than submitting again. Desktop permissions and model settings remain under user control."
 		case "codex_status", "codex_cancel":
 			props["task_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 32}
 			required = []string{"task_id"}

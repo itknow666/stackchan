@@ -93,10 +93,10 @@ def load_config(path: Path) -> Config:
         raise ValueError("State file must differ from the configuration file")
     codex = raw.get("codex")
     if codex is not None:
-        if not isinstance(codex, dict) or codex.keys() - {"executable", "tasks_file", "sandbox", "timeout_seconds", "home", "windows_sandbox"}:
+        if not isinstance(codex, dict) or codex.keys() - {"executable", "tasks_file", "sandbox", "timeout_seconds", "home", "windows_sandbox", "backend", "desktop_node", "desktop_server", "desktop_caller_thread", "desktop_workspace"}:
             raise ValueError("Invalid Codex configuration")
         executable = codex.get("executable")
-        if not isinstance(executable, str) or not Path(executable).is_absolute() or Path(executable).suffix.lower() != ".exe":
+        if codex.get("backend", "cli") == "cli" and (not isinstance(executable, str) or not Path(executable).is_absolute() or Path(executable).suffix.lower() != ".exe"):
             raise ValueError("Configure an absolute Codex executable")
         sandbox = codex.get("sandbox", "read-only")
         timeout = codex.get("timeout_seconds", 1800)
@@ -121,7 +121,21 @@ def load_config(path: Path) -> Config:
         windows_sandbox = codex.get("windows_sandbox")
         if windows_sandbox is not None and (not isinstance(windows_sandbox, str) or windows_sandbox not in {"mxc", "elevated", "unelevated"}):
             raise ValueError("Invalid Windows sandbox backend")
-        codex = {"executable": executable, "sandbox": sandbox, "timeout_seconds": timeout, "tasks_file": tasks.resolve(), "home": home, "windows_sandbox": windows_sandbox}
+        backend = codex.get("backend", "cli")
+        desktop = {}
+        if backend not in {"cli", "desktop"}:
+            raise ValueError("Invalid Codex backend")
+        if backend == "desktop":
+            for key in ("desktop_node", "desktop_server", "desktop_workspace"):
+                value = codex.get(key)
+                if not isinstance(value, str) or not Path(value).is_absolute() or not Path(value).exists():
+                    raise ValueError("Configure existing absolute desktop paths")
+                desktop[key] = value
+            caller = codex.get("desktop_caller_thread")
+            if not isinstance(caller, str) or not re.fullmatch(r"[a-f0-9-]{36}", caller):
+                raise ValueError("Configure the originating Codex chat ID")
+            desktop["desktop_caller_thread"] = caller
+        codex = {"executable": executable, "sandbox": sandbox, "timeout_seconds": timeout, "tasks_file": tasks.resolve(), "home": home, "windows_sandbox": windows_sandbox, "backend": backend, **desktop}
     if set(actions) & {"codex_start", "codex_status", "codex_cancel"} and (codex is None or not groups["projects"]):
         raise ValueError("Codex actions require configuration and allowed projects")
     config = Config(endpoint, token, pc_id, frozenset(actions), groups["apps"], groups["projects"],

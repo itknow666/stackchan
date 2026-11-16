@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 
 from .config import Config
 from .codex_tasks import CodexTasks
+from .desktop_tasks import DesktopCodexTasks
 
 
 def validate_action(config: Config, action, args):
@@ -51,7 +52,8 @@ class NativeExecutor:
 
     def __init__(self, config: Config):
         self.config = config
-        self.codex_tasks = CodexTasks(config) if config.codex else None
+        manager = DesktopCodexTasks if config.codex and config.codex.get("backend") == "desktop" else CodexTasks
+        self.codex_tasks = manager(config) if config.codex else None
 
     async def execute(self, action, args, before_effect=lambda: None):
         validate_action(self.config, action, args)

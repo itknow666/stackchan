@@ -159,6 +159,9 @@ func (c *openAIClient) Chat(ctx context.Context, history []chatMessage, ha *haWS
 	pcTurn := &pcTurn{}
 	robotCalls := 0
 	emotionSet := false
+	var codexPrompt string
+	var codexPromptErr error
+	codexOptimized := false
 
 	for round := 0; round < 8; round++ {
 		tools := append([]map[string]any{}, baseTools...)
@@ -224,7 +227,19 @@ func (c *openAIClient) Chat(ctx context.Context, history []chatMessage, ha *haWS
 				if argsErr != nil || args == nil {
 					dispErr = fmt.Errorf("invalid computer arguments")
 				} else {
-					result, dispErr = c.pc.dispatch(ctx, pcTurn, tc.Function.Name, args)
+					if tc.Function.Name == "pc_codex_start" {
+						if !codexOptimized {
+							codexPrompt, codexPromptErr = c.optimizeCodexRequest(ctx, history)
+							codexOptimized = true
+						}
+						dispErr = codexPromptErr
+						if dispErr == nil {
+							args["task"] = codexPrompt
+						}
+					}
+					if dispErr == nil {
+						result, dispErr = c.pc.dispatch(ctx, pcTurn, tc.Function.Name, args)
+					}
 				}
 			} else if c.robot != nil && (tc.Function.Name == "set_emotion" || tc.Function.Name == "set_pose") {
 				if ctx.Err() != nil {
