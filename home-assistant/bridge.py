@@ -7,6 +7,8 @@ from bleak import BleakClient, BleakScanner
 BASE = Path(__file__).resolve().parent
 ROOT = BASE.parent
 TOPIC = 'stackchan_dania'
+PREVIEW_TIMEOUT_SECONDS=22
+PREVIEW_CLEANUP_TIMEOUT_SECONDS=2
 UUID = 'e2e5e5e{}-1234-5678-1234-56789abcdef0'
 SAFE_ID=re.compile(r'[A-Za-z0-9_-]{1,64}\Z')
 PC_ACTIONS={'open_app':'打开指定软件','open_project':'打开项目文件夹','set_volume':'电脑音量',
@@ -282,12 +284,14 @@ class Bridge:
             self.publish('last_result',messages[state])
         try:
             clip=self.rules[key].get('id',key)
-            async with self.config_lock:
+            # The real cancellation deadline includes lock acquisition and
+            # every BLE await, including the initial physical-command write.
+            async with asyncio.timeout(PREVIEW_TIMEOUT_SECONDS), self.config_lock:
                 request=self.next_request()
                 cancel_sent=False
                 try:
                     await self.write('3',{'cmd':'playLocalClip','id':clip,'request_id':request})
-                    deadline=time.monotonic()+22
+                    deadline=time.monotonic()+PREVIEW_TIMEOUT_SECONDS
                     last_state=None
                     while time.monotonic()<deadline:
                         if self.robot_preview_cancel.is_set() and not cancel_sent:
@@ -316,17 +320,20 @@ class Bridge:
                         # while reading its terminal ACK so volume/storage
                         # polling cannot immediately overwrite the cancellation.
                         try:
-                            await self.write('3',{'cmd':'cancelLocalClip','request_id':request})
-                            cleanup_deadline=time.monotonic()+2
-                            while time.monotonic()<cleanup_deadline:
-                                try: reply=await self.config_reply(request,'local_clip',min(.3,max(.01,cleanup_deadline-time.monotonic())))
-                                except TimeoutError: continue
-                                if reply.get('state') in ('completed','unavailable','failed','cancelled'):
-                                    terminal=True
-                                    report(reply['state'],True)
-                                    break
-                            if not terminal: self.publish('last_result','机器人试听及停止结果未知，未重复播放')
+                            # A clock condition alone cannot bound a suspended
+                            # GATT operation. Cancel the entire cleanup, write
+                            # and reads included, before releasing this lock.
+                            async with asyncio.timeout(PREVIEW_CLEANUP_TIMEOUT_SECONDS):
+                                await self.write('3',{'cmd':'cancelLocalClip','request_id':request})
+                                while True:
+                                    try: reply=await self.config_reply(request,'local_clip',.3)
+                                    except TimeoutError: continue
+                                    if reply.get('state') in ('completed','unavailable','failed','cancelled'):
+                                        terminal=True
+                                        report(reply['state'],True)
+                                        break
                         except Exception: pass
+                        if not terminal: self.publish('last_result','机器人试听及停止结果未知，未重复播放')
         except asyncio.CancelledError: raise
         except Exception:
             if not terminal: self.publish('last_result','机器人试听未确认或已中断，未重复播放')

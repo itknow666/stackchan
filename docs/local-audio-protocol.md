@@ -39,6 +39,6 @@
 
 回执 `{"cmd":"local_clip","request_id":101,"state":"pending"}`，状态可为 `pending`、`accepted`、`completed`、`unavailable`、`failed`、`cancelled`。仅 Agent 待机且音频空闲时开始，不打断聊天；新网络回复可取消试听。
 
-桥接试听期间持有配置锁，只读取通知同步更新的可读 GATT 缓存，不写状态查询去覆盖尚未消费的 play 或 cancel。首次匹配回执前也不会重发 play。停止按钮由该任务发送同 ID 取消，旧 accepted 不作为停止确认；收到 cancelled 才显示已停止。异常收尾最多再发一次幂等取消，并保持配置锁最多两秒只读终态。未知结果明确显示未确认，不报成功或重播。完成先于停止确认时只报告实际播放已结束。`getLocalClipStatus` 保留供串行诊断，不能用它与未确认的物理命令争抢 latest-only 配置邮箱。
+桥接试听期间持有配置锁，只读取通知同步更新的可读 GATT 缓存，不写状态查询去覆盖尚未消费的 play 或 cancel。首次匹配回执前也不会重发 play。主流程用真实可取消的二十二秒期限覆盖等待配置锁、首次播放写入及所有读取；不会仅靠循环读时钟判断超时。停止按钮由该任务发送同 ID 取消，旧 accepted 不作为停止确认；收到 cancelled 才显示已停止。异常收尾最多再发一次幂等取消，独立的真实两秒期限覆盖取消写入和终态读取，随后释放配置锁。外部取消继续向上传播。未知结果明确显示未确认，不报成功或重播。完成先于停止确认时只报告实际播放已结束。`getLocalClipStatus` 保留供串行诊断，不能用它与未确认的物理命令争抢 latest-only 配置邮箱。
 
 `getStorageInfo` 返回 `cmd:storage`、`request_id`、`mounted`、`valid`、`pack_id`、`clips`、`total_mb`、`free_mb`、`error`，仅使用缓存，不重复扫描卡。旧固件无响应显示未知或不支持，蓝牙断开清除可用状态。MQTT 物理操作拒绝 retained 消息，启动和重连不自动试听。

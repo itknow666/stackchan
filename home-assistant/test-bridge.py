@@ -1,6 +1,8 @@
 import asyncio, json, sys, threading, time, unittest, tempfile
 from pathlib import Path
+from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).parent))
+import bridge as bridge_module
 from bridge import Bridge, motion_payload, volume_value, TOPIC, cloud_status, UUID, pc_status
 import paho.mqtt.client as mqtt
 
@@ -238,6 +240,97 @@ class Contracts(unittest.TestCase):
                 self.assertIn(('last_result','机器人试听已停止'),published)
             finally:
                 for handle in device.handles: handle.cancel()
+        asyncio.run(exercise())
+
+    def test_preview_cleanup_hung_read_and_write_release_lock_in_two_seconds(self):
+        async def exercise(hang):
+            b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'})
+            b.rules={'hello':{'file':'hello.pcm'}}
+            published=[];b.publish=lambda *v:published.append(v)
+            sent=[]
+            class Device:
+                is_connected=True
+                cleaning=False
+                async def write(self,suffix,data):
+                    sent.append(data['cmd'])
+                    if data['cmd']=='cancelLocalClip':
+                        self.cleaning=True
+                        if hang=='write': await asyncio.Future()
+                async def read_gatt_char(self,uuid):
+                    if self.cleaning: await asyncio.Future()
+                    return json.dumps({'cmd':'local_clip','request_id':b.config_request,'state':'invalid'}).encode()
+            device=Device();b.client=device;b.write=device.write
+            task=asyncio.create_task(b.robot_preview('hello'))
+            try:
+                done,_=await asyncio.wait({task},timeout=2.4)
+                self.assertIn(task,done,'cleanup did not enforce its real two-second deadline')
+                await task
+                self.assertFalse(b.config_lock.locked())
+                self.assertEqual(sent.count('playLocalClip'),1)
+                self.assertFalse(any(value in ('机器人试听已停止','机器人 SD 试听已播放完成') for _,value in published))
+                self.assertTrue(any('未知' in value or '未确认' in value for _,value in published))
+            finally:
+                if not task.done(): task.cancel()
+                await asyncio.gather(task,return_exceptions=True)
+        for hang in ('read','write'):
+            with self.subTest(hang=hang): asyncio.run(exercise(hang))
+
+    def test_preview_total_timeout_bounds_hung_play_and_normal_read(self):
+        async def exercise(hang):
+            b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'})
+            b.rules={'hello':{'file':'hello.pcm'}}
+            b.publish=lambda *v:None
+            sent=[]
+            class Device:
+                is_connected=True
+                cleaning=False
+                async def write(self,suffix,data):
+                    sent.append(data['cmd'])
+                    if data['cmd']=='cancelLocalClip': self.cleaning=True
+                    elif hang=='write': await asyncio.Future()
+                async def read_gatt_char(self,uuid):
+                    if not self.cleaning: await asyncio.Future()
+                    return json.dumps({'cmd':'local_clip','request_id':b.config_request,'state':'cancelled'}).encode()
+            device=Device();b.client=device;b.write=device.write
+            # Use the exact same timeout scopes with a shorter test budget.
+            with patch.object(bridge_module,'PREVIEW_TIMEOUT_SECONDS',.15,create=True):
+                task=asyncio.create_task(b.robot_preview('hello'))
+                try:
+                    done,_=await asyncio.wait({task},timeout=.7)
+                    self.assertIn(task,done,'main preview BLE await ignored its total deadline')
+                    await task
+                    self.assertFalse(b.config_lock.locked())
+                    self.assertEqual(sent.count('playLocalClip'),1)
+                    self.assertEqual(sent.count('cancelLocalClip'),1)
+                finally:
+                    if not task.done(): task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
+        for hang in ('read','write'):
+            with self.subTest(hang=hang): asyncio.run(exercise(hang))
+
+    def test_preview_external_cancellation_propagates_after_bounded_cleanup(self):
+        async def exercise():
+            b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'})
+            b.rules={'hello':{'file':'hello.pcm'}}
+            b.publish=lambda *v:None
+            started=asyncio.Event()
+            class Device:
+                is_connected=True
+                cleaning=False
+                async def write(self,suffix,data):
+                    if data['cmd']=='cancelLocalClip': self.cleaning=True
+                async def read_gatt_char(self,uuid):
+                    if not self.cleaning:
+                        started.set()
+                        await asyncio.Future()
+                    return json.dumps({'cmd':'local_clip','request_id':b.config_request,'state':'cancelled'}).encode()
+            device=Device();b.client=device;b.write=device.write
+            task=asyncio.create_task(b.robot_preview('hello'))
+            await asyncio.wait_for(started.wait(),1)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError): await asyncio.wait_for(task,1)
+            self.assertFalse(b.config_lock.locked())
+            self.assertTrue(task.cancelled())
         asyncio.run(exercise())
 
 def live():
