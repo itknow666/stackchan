@@ -6,11 +6,18 @@ The standalone Compose runtime passes through `STACKCHAN_ROBOT_TOOLS` and
 guide for private voice imports, the Windows BLE console, and current hardware limits.
 
 An opt-in computer relay serves `/dania/pc/ws`. Set `STACKCHAN_PC_TOKEN` (at
-least 32 characters), `STACKCHAN_PC_ID` (default `desktop`) and an explicit
-comma-separated `STACKCHAN_PC_DEVICE_IDS` allowlist of authorized robots.
-Only compatible voice sessions for those devices can use the connected PC's
+least 32 characters), a separate `STACKCHAN_PC_GATEWAY_TOKEN` (32–4096 URL-safe
+characters, different from the PC token), `STACKCHAN_PC_ID` (default `desktop`)
+and an explicit comma-separated `STACKCHAN_PC_DEVICE_IDS` allowlist of robots.
+Only compatible voice sessions asserted by the trusted gateway for those devices
+can use the connected PC's
 allowlisted application/project, volume, media, browser-search and lock tools.
 The Windows helper makes an outgoing WSS connection; no PC inbound port is needed.
+Compose publishes the backend on host loopback only. Keep it inaccessible from
+the public network, protect the robot gateway secret path, and let that gateway
+overwrite the private assertion header. Device-Id alone does not authorize PC
+control. Never give the gateway token to robot firmware or the Windows helper;
+ordinary voice sessions without an assertion remain usable without PC tools.
 Results are acknowledged, simulation remains explicit, and timeout/disconnect
 outcomes are never retried automatically. See [the relay protocol](docs/pc-relay.md).
 

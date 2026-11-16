@@ -13,6 +13,7 @@ import (
 type pcControl struct {
 	relay    *pcRelay
 	deviceID string
+	grant    *pcGrant
 }
 type pcMemo struct {
 	text string
@@ -23,11 +24,12 @@ type pcTurn struct {
 	memo  map[string]pcMemo
 }
 
-func pcControlFor(r *pcRelay, deviceID string) *pcControl {
-	if !r.authorized(deviceID) {
+func pcControlFor(ctx context.Context, r *pcRelay, deviceID string) *pcControl {
+	if !r.authorizedContext(ctx, deviceID) {
 		return nil
 	}
-	return &pcControl{relay: r, deviceID: deviceID}
+	grant, _ := ctx.Value(pcGrantKey{}).(*pcGrant)
+	return &pcControl{relay: r, deviceID: deviceID, grant: grant}
 }
 func hasPCAction(c pcCapabilities, action string) bool {
 	for _, allowed := range c.Actions {
@@ -49,7 +51,7 @@ func pcEnum(field string, values []string) map[string]any {
 }
 
 func (p *pcControl) tools() []map[string]any {
-	if p == nil {
+	if p == nil || p.grant == nil || p.grant.relay != p.relay || p.grant.deviceID != p.deviceID {
 		return nil
 	}
 	peer := p.relay.connected(p.deviceID)
@@ -166,7 +168,7 @@ func validatePCAction(c pcCapabilities, action string, args map[string]any) erro
 }
 
 func (p *pcControl) dispatch(ctx context.Context, turn *pcTurn, name string, args map[string]any) (string, error) {
-	if p == nil || !p.relay.authorized(p.deviceID) {
+	if p == nil || p.grant == nil || p.grant.relay != p.relay || p.grant.deviceID != p.deviceID || !p.relay.authorizedContext(ctx, p.deviceID) {
 		return "", errors.New("computer access is not authorized for this robot")
 	}
 	if turn.memo == nil {

@@ -84,7 +84,7 @@ type wsSession struct {
 // HandleWS upgrades the connection and runs a Xiaozhi v3 protocol session
 // backed by OpenAI Realtime API.
 func HandleWS(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithCancel(gctx.New())
+	ctx, cancel := context.WithCancel(pcRequestContext(gctx.New(), defaultPCRelay, r))
 	defer cancel()
 
 	conn, err := upgrader.Upgrade(w, r, nil)

@@ -12,6 +12,9 @@ if not re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?',domain):raise S
 if not re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}',device):raise SystemExit('Invalid device identifier')
 if not re.fullmatch(r'127\.0\.0\.1:[0-9]{1,5}',upstream):raise SystemExit('Upstream must be a loopback listener')
 if type(cfg.get('pc_relay_enabled',False)) is not bool:raise SystemExit('pc_relay_enabled must be boolean')
+gateway_token=cfg.get('pc_gateway_token','')
+if cfg.get('pc_relay_enabled',False) and (not isinstance(gateway_token,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,4096}',gateway_token)):
+    raise SystemExit('pc_relay_enabled requires a private URL-safe pc_gateway_token of at least 32 characters')
 os.umask(0o077)
 args.output.mkdir(parents=True,exist_ok=True)
 access_path=args.output/'device-access.json'
@@ -43,7 +46,7 @@ DOMAIN {
     }
     handle @robot {
         rewrite * /xiaozhi/ws
-        reverse_proxy UPSTREAM
+        ROBOT_PROXY
     }
 PC_RELAY_ROUTE    handle {
         respond 404
@@ -55,6 +58,8 @@ pc_route = f'''    @computer path /dania/pc/ws
         reverse_proxy {upstream}
     }}
 ''' if cfg.get('pc_relay_enabled',False) else ''
-config=config.replace('PC_RELAY_ROUTE',pc_route)
+robot_header=f'header_up X-Stackchan-PC-Device-Token {json.dumps(gateway_token)}' if cfg.get('pc_relay_enabled',False) else 'header_up -X-Stackchan-PC-Device-Token'
+robot_proxy=f'reverse_proxy {upstream} {{\n            {robot_header}\n        }}'
+config=config.replace('PC_RELAY_ROUTE',pc_route).replace('ROBOT_PROXY',robot_proxy)
 (args.output/'Caddyfile').write_text(config)
 print('Private gateway files generated; device URLs are not printed')

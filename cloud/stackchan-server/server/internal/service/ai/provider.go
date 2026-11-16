@@ -167,7 +167,7 @@ func dialProvider(
 	switch provider {
 	case "openai_compatible", "tokenhub", "openrouter":
 		cfg := compatibleConfigFor(ctx, p, provider, sysPrompt)
-		cfg.PC = pcControlFor(defaultPCRelay, deviceID)
+		cfg.PC = pcControlFor(ctx, defaultPCRelay, deviceID)
 		return dialCompatibleSession(ctx, cfg, ha, cb)
 
 	case "gemini":

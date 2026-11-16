@@ -5,9 +5,13 @@
 默认不启用。私人语音导入、Windows 蓝牙控制台与当前硬件限制见根目录部署说明。
 
 可选电脑中继位于 `/dania/pc/ws`。必须同时设置至少三十二字符的私有
-`STACKCHAN_PC_TOKEN`、电脑标识 `STACKCHAN_PC_ID`（默认 `desktop`）和
-`STACKCHAN_PC_DEVICE_IDS` 机器人设备白名单才能启用。只有白名单设备的兼容语音
+`STACKCHAN_PC_TOKEN`、独立的 `STACKCHAN_PC_GATEWAY_TOKEN`（三十二到四千零九十六
+个 URL 安全字符，必须不同于电脑 Token）、电脑标识 `STACKCHAN_PC_ID`（默认 `desktop`）和
+`STACKCHAN_PC_DEVICE_IDS` 机器人设备白名单才能启用。只有经可信网关断言的白名单设备兼容语音
 会话可以调用已连接电脑声明的软件、项目、音量、媒体、网页搜索和锁屏工具。
+Compose 默认仅在宿主机回环地址发布后端，后端不得直接暴露公网。网关必须保护
+机器人秘密入口，并覆盖外来断言请求头。设备标识本身不能授权电脑控制，网关 Token
+只能保存在云端与可信网关，不能下发给机器人或电脑助手；没有断言仍可普通语音聊天。
 Windows 助手主动建立 WSS 连接，电脑无需开放入站端口；模型收到实际回执后才
 获得执行结果，模拟结果明确标识，超时或断线均不自动重试。见[中继协议](docs/pc-relay.md)。
 

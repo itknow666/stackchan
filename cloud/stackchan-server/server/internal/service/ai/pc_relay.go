@@ -27,6 +27,7 @@ import (
 
 const pcMaxFrame = 16 * 1024
 const pcMaxPending = 4
+const pcGatewayHeader = "X-Stackchan-PC-Device-Token"
 
 var pcIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 var pcActions = map[string]bool{"open_app": true, "open_project": true, "set_volume": true, "media": true, "search_web": true, "lock": true}
@@ -62,7 +63,7 @@ type pcPending struct {
 	deadline time.Time
 }
 type pcRelay struct {
-	token, pcID                             string
+	token, gatewayToken, pcID               string
 	devices                                 map[string]bool
 	enabled                                 bool
 	timeout                                 time.Duration
@@ -82,21 +83,62 @@ type pcPeer struct {
 	closeOnce     sync.Once
 }
 
-func newPCRelay(token, pcID string, devices []string) *pcRelay {
+func newPCRelay(token, gatewayToken, pcID string, devices []string) *pcRelay {
 	if pcID == "" {
 		pcID = "desktop"
 	}
-	r := &pcRelay{token: token, pcID: pcID, devices: map[string]bool{}, timeout: 15 * time.Second, helloTimeout: 5 * time.Second, pingInterval: 20 * time.Second, pongTimeout: 45 * time.Second}
+	r := &pcRelay{token: token, gatewayToken: gatewayToken, pcID: pcID, devices: map[string]bool{}, timeout: 15 * time.Second, helloTimeout: 5 * time.Second, pingInterval: 20 * time.Second, pongTimeout: 45 * time.Second}
 	for _, id := range devices {
 		if id = strings.TrimSpace(id); id != "" {
 			r.devices[id] = true
 		}
 	}
-	r.enabled = len(token) >= 32 && len(token) <= 4096 && strings.IndexFunc(token, unicode.IsSpace) < 0 && pcIdentifier.MatchString(pcID) && len(r.devices) > 0
+	r.enabled = len(token) >= 32 && len(token) <= 4096 && strings.IndexFunc(token, unicode.IsSpace) < 0 && validPCGatewayToken(gatewayToken) && token != gatewayToken && pcIdentifier.MatchString(pcID) && len(r.devices) > 0
 	return r
 }
 func pcRelayFromEnv() *pcRelay {
-	return newPCRelay(os.Getenv("STACKCHAN_PC_TOKEN"), os.Getenv("STACKCHAN_PC_ID"), strings.Split(os.Getenv("STACKCHAN_PC_DEVICE_IDS"), ","))
+	return newPCRelay(os.Getenv("STACKCHAN_PC_TOKEN"), os.Getenv("STACKCHAN_PC_GATEWAY_TOKEN"), os.Getenv("STACKCHAN_PC_ID"), strings.Split(os.Getenv("STACKCHAN_PC_DEVICE_IDS"), ","))
+}
+
+func validPCGatewayToken(token string) bool {
+	if len(token) < 32 || len(token) > 4096 {
+		return false
+	}
+	for _, ch := range token {
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+type pcGrantKey struct{}
+type pcGrant struct {
+	relay    *pcRelay
+	deviceID string
+}
+
+// Device-Id identifies a robot but does not authenticate it. Only the trusted
+// secret-path gateway may assert PC access; public robot firmware needs no new
+// credential. Never copy this gateway-only token to a device or PC client.
+func pcRequestContext(ctx context.Context, relay *pcRelay, req *http.Request) context.Context {
+	ctx = context.WithValue(ctx, pcGrantKey{}, (*pcGrant)(nil)) // revoke any inherited request grant
+	if relay == nil || !relay.enabled || len(req.Header.Values(pcGatewayHeader)) != 1 {
+		return ctx
+	}
+	want, got := sha256.Sum256([]byte(relay.gatewayToken)), sha256.Sum256([]byte(req.Header.Get(pcGatewayHeader)))
+	if subtle.ConstantTimeCompare(want[:], got[:]) != 1 {
+		return ctx
+	}
+	device := req.Header.Get("Device-Id")
+	if !relay.authorized(device) {
+		return ctx
+	}
+	return context.WithValue(ctx, pcGrantKey{}, &pcGrant{relay: relay, deviceID: device})
+}
+func (r *pcRelay) authorizedContext(ctx context.Context, device string) bool {
+	grant, _ := ctx.Value(pcGrantKey{}).(*pcGrant)
+	return r.authorized(device) && grant != nil && grant.relay == r && grant.deviceID == device
 }
 
 var defaultPCRelay = pcRelayFromEnv()
@@ -389,7 +431,7 @@ func (r *pcRelay) connected(device string) *pcPeer {
 	return nil
 }
 func (r *pcRelay) call(ctx context.Context, device, action string, args map[string]any) (pcResult, error) {
-	if !r.authorized(device) {
+	if !r.authorizedContext(ctx, device) {
 		return pcResult{}, errors.New("computer access is not authorized for this robot")
 	}
 	p := r.connected(device)

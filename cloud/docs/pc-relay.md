@@ -4,20 +4,36 @@
 
 ```dotenv
 STACKCHAN_PC_TOKEN=
+STACKCHAN_PC_GATEWAY_TOKEN=
 STACKCHAN_PC_ID=desktop
 STACKCHAN_PC_DEVICE_IDS=
 ```
 
 Token 必须包含三十二到四千零九十六个非空白字符，请在本机生成随机值，勿提交到
 仓库。设备白名单使用机器人建立语音 WebSocket 时的 `Device-Id`，多个值用逗号隔开。
-电脑 ID 和 Token 应与 Windows 助手私有配置一致。缺少有效 Token、设备白名单或
-电脑 ID 时中继返回服务不可用；未授权机器人不会获得电脑工具或能力清单。
+电脑 ID 和电脑 Token 应与 Windows 助手私有配置一致。独立的网关 Token 必须由
+三十二到四千零九十六位 URL 安全字符（字母、数字、下划线、连字符）组成，且必须
+不同于电脑 Token。缺少任何一个有效 Token、设备白名单或电脑 ID 无效时，中继
+返回服务不可用；电脑 ID 留空时默认 `desktop`。未授权机器人不会获得电脑工具或能力清单。
 
 电脑主动连接 `wss://你的域名/dania/pc/ws`，使用 `Authorization: Bearer <token>`。
 云端只允许每个已配置电脑 ID 一个连接，拒绝新连接抢占。HTTP 层必须使用有效 TLS，
 Token 不放 URL 中。现有 `tools/render-gateway.py` 的私有输入配置可增加
-`"pc_relay_enabled": true` 来生成这条可选反向代理路由；生成文件不会部署或重启服务。
-独立 Compose 已透传上述三项环境变量。服务直接运行时环境变量在进程启动时读取。
+`"pc_relay_enabled": true` 并提供 `"pc_gateway_token"` 私有值来生成可选路由；
+生成文件不会部署或重启服务。独立 Compose 已透传上述环境变量，默认仅在
+宿主机 `127.0.0.1` 发布后端端口。服务直接运行时环境变量在进程启动时读取。
+
+`Device-Id` 是客户端声明的设备标识，不能作为电脑控制凭证。必须保护机器人秘密
+路径，并禁止公网直连后端，避免绕过网关。可信网关只有在秘密路径与设备标识匹配的
+机器人入口才使用 `header_up X-Stackchan-PC-Device-Token <私有网关值>`，强制覆盖
+客户端提供的同名头。未启用电脑中继时，生成器会移除该头。后端按恒定时间方式验证
+网关断言，并将授权限定在当前机器人连接的 context 内；provider 与实际派发仍检查
+设备白名单与该授权。缺少、错误或拿电脑 Token 冒充的断言不会得到电脑工具，普通
+语音聊天仍然可用。
+
+网关 Token 仅保存于云端进程环境和可信网关配置，不得写入公开文件、设备 URL、
+机器人固件或电脑助手配置。它不是可以公开分发的机器人凭证。电脑 WebSocket 的
+Bearer Token 只用于电脑连接，不能代替网关断言。
 
 首条消息（能力列表只包含本机允许的项目，不携带路径或可执行文件参数）：
 

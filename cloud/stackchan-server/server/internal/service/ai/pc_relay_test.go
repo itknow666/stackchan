@@ -17,13 +17,21 @@ import (
 )
 
 const pcTestToken = "test-computer-token-not-a-real-secret-1234"
+const pcTestGatewayToken = "test-gateway-assertion-not-a-real-secret-5678"
+
+func pcTestContext(r *pcRelay) context.Context {
+	req := httptest.NewRequest("GET", "/xiaozhi/ws", nil)
+	req.Header.Set("Device-Id", "robot-allowed")
+	req.Header.Set(pcGatewayHeader, pcTestGatewayToken)
+	return pcRequestContext(context.Background(), r, req)
+}
 
 func pcTestCaps() pcCapabilities {
 	return pcCapabilities{Apps: []pcItem{{ID: "browser", Name: "Browser"}}, Projects: []pcItem{{ID: "robot", Name: "Robot project"}}, Actions: []string{"open_app", "open_project", "set_volume", "media", "search_web", "lock"}}
 }
 func newPCTestServer(t *testing.T) (*pcRelay, *httptest.Server) {
 	t.Helper()
-	r := newPCRelay(pcTestToken, "desktop", []string{"robot-allowed"})
+	r := newPCRelay(pcTestToken, pcTestGatewayToken, "desktop", []string{"robot-allowed"})
 	server := httptest.NewServer(r)
 	t.Cleanup(func() {
 		r.mu.Lock()
@@ -92,7 +100,7 @@ func pcReply(t *testing.T, c *websocket.Conn, call map[string]any, ok bool, data
 }
 
 func TestPCRelayDisabledAndAuthentication(t *testing.T) {
-	for _, r := range []*pcRelay{newPCRelay("", "desktop", []string{"r"}), newPCRelay("short", "desktop", []string{"r"}), newPCRelay(pcTestToken, "desktop", nil), newPCRelay(pcTestToken, "../invalid", []string{"r"})} {
+	for _, r := range []*pcRelay{newPCRelay("", pcTestGatewayToken, "desktop", []string{"r"}), newPCRelay("short", pcTestGatewayToken, "desktop", []string{"r"}), newPCRelay(pcTestToken, "", "desktop", []string{"r"}), newPCRelay(pcTestToken, "short", "desktop", []string{"r"}), newPCRelay(pcTestToken, pcTestToken, "desktop", []string{"r"}), newPCRelay(pcTestToken, pcTestGatewayToken, "desktop", nil), newPCRelay(pcTestToken, pcTestGatewayToken, "../invalid", []string{"r"})} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest("GET", "/dania/pc/ws", nil))
 		if rec.Code != http.StatusServiceUnavailable {
@@ -100,7 +108,7 @@ func TestPCRelayDisabledAndAuthentication(t *testing.T) {
 		}
 	}
 	r, server := newPCTestServer(t)
-	for _, token := range []string{"", pcTestToken + "x"} {
+	for _, token := range []string{"", pcTestToken + "x", pcTestGatewayToken} {
 		_, resp, err := pcDial(t, server, token)
 		if err == nil || resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("authentication accepted: %v", err)
@@ -108,17 +116,17 @@ func TestPCRelayDisabledAndAuthentication(t *testing.T) {
 		resp.Body.Close()
 	}
 	pcConnect(t, r, server)
-	if r.connected("untrusted") != nil || pcControlFor(r, "untrusted") != nil {
+	if r.connected("untrusted") != nil || pcControlFor(pcTestContext(r), r, "untrusted") != nil {
 		t.Fatal("unauthorized device sees capabilities")
 	}
-	if _, err := r.call(context.Background(), "untrusted", "lock", map[string]any{}); err == nil {
+	if _, err := r.call(pcTestContext(r), "untrusted", "lock", map[string]any{}); err == nil {
 		t.Fatal("unauthorized dispatch succeeded")
 	}
 	var forged = &pcControl{relay: r, deviceID: "untrusted"}
 	if len(forged.tools()) != 0 {
 		t.Fatal("forged control disclosed tools")
 	}
-	if _, err := forged.dispatch(context.Background(), &pcTurn{}, "pc_lock", map[string]any{}); err == nil {
+	if _, err := forged.dispatch(pcTestContext(r), &pcTurn{}, "pc_lock", map[string]any{}); err == nil {
 		t.Fatal("dispatch missed authorization")
 	}
 }
@@ -165,7 +173,7 @@ func TestPCRelayHelloValidationAndTakeover(t *testing.T) {
 		t.Fatal("takeover accepted")
 	}
 	done := make(chan error, 1)
-	go func() { _, err := r.call(context.Background(), "robot-allowed", "lock", map[string]any{}); done <- err }()
+	go func() { _, err := r.call(pcTestContext(r), "robot-allowed", "lock", map[string]any{}); done <- err }()
 	call := pcReadCall(t, first)
 	pcReply(t, first, call, true, map[string]any{})
 	if err := <-done; err != nil {
@@ -179,7 +187,7 @@ func TestPCRelayActualResultAndBoundedPending(t *testing.T) {
 	done := make(chan pcOutcome, 4)
 	for i := 0; i < 4; i++ {
 		go func() {
-			result, err := r.call(context.Background(), "robot-allowed", "lock", map[string]any{})
+			result, err := r.call(pcTestContext(r), "robot-allowed", "lock", map[string]any{})
 			done <- pcOutcome{result: result, err: err}
 		}()
 	}
@@ -187,7 +195,7 @@ func TestPCRelayActualResultAndBoundedPending(t *testing.T) {
 	for i := range calls {
 		calls[i] = pcReadCall(t, c)
 	}
-	if _, err := r.call(context.Background(), "robot-allowed", "lock", map[string]any{}); err == nil || !strings.Contains(err.Error(), "busy") {
+	if _, err := r.call(pcTestContext(r), "robot-allowed", "lock", map[string]any{}); err == nil || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("pending cap: %v", err)
 	}
 	select {
@@ -217,7 +225,7 @@ func TestPCRelayDisconnectReconnectAndUnsolicited(t *testing.T) {
 	r, s := newPCTestServer(t)
 	c := pcConnect(t, r, s)
 	done := make(chan error, 1)
-	go func() { _, err := r.call(context.Background(), "robot-allowed", "lock", map[string]any{}); done <- err }()
+	go func() { _, err := r.call(pcTestContext(r), "robot-allowed", "lock", map[string]any{}); done <- err }()
 	oldCall := pcReadCall(t, c)
 	c.Close()
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "not retried") {
@@ -228,7 +236,7 @@ func TestPCRelayDisconnectReconnectAndUnsolicited(t *testing.T) {
 	// A result from the old socket cannot complete work on a new connection.
 	pcReply(t, next, oldCall, true, map[string]any{})
 	pcWait(t, func() bool { return r.connected("robot-allowed") == nil })
-	if _, err := r.call(context.Background(), "robot-allowed", "lock", map[string]any{}); err == nil || !strings.Contains(err.Error(), "offline") {
+	if _, err := r.call(pcTestContext(r), "robot-allowed", "lock", map[string]any{}); err == nil || !strings.Contains(err.Error(), "offline") {
 		t.Fatal(err)
 	}
 }
@@ -238,7 +246,7 @@ func TestPCRelayTimeoutAndCancellation(t *testing.T) {
 	r.timeout = 150 * time.Millisecond
 	c := pcConnect(t, r, s)
 	done := make(chan error, 1)
-	go func() { _, err := r.call(context.Background(), "robot-allowed", "lock", map[string]any{}); done <- err }()
+	go func() { _, err := r.call(pcTestContext(r), "robot-allowed", "lock", map[string]any{}); done <- err }()
 	pcReadCall(t, c)
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("missing timeout: %v", err)
@@ -250,7 +258,7 @@ func TestPCRelayTimeoutAndCancellation(t *testing.T) {
 	if count != 0 {
 		t.Fatal("timeout leaked pending")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(pcTestContext(r))
 	cancel()
 	if _, err := r.call(ctx, "robot-allowed", "lock", map[string]any{}); err != context.Canceled {
 		t.Fatalf("cancelled call: %v", err)
@@ -262,7 +270,7 @@ func TestPCRelayCancelledWriterDoesNotSendQueuedAction(t *testing.T) {
 	conn := pcConnect(t, r, s)
 	p := r.connected("robot-allowed")
 	p.writeMu.Lock()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(pcTestContext(r))
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, err := r.call(ctx, "robot-allowed", "lock", map[string]any{}); done <- err }()
@@ -283,7 +291,7 @@ func TestPCRelayRejectsMalformedResults(t *testing.T) {
 		r, s := newPCTestServer(t)
 		c := pcConnect(t, r, s)
 		done := make(chan error, 1)
-		go func() { _, err := r.call(context.Background(), "robot-allowed", "lock", map[string]any{}); done <- err }()
+		go func() { _, err := r.call(pcTestContext(r), "robot-allowed", "lock", map[string]any{}); done <- err }()
 		call := pcReadCall(t, c)
 		c.WriteMessage(websocket.TextMessage, []byte(strings.ReplaceAll(bad, "ID", call["id"].(string))))
 		select {
@@ -306,10 +314,10 @@ func TestPCRelayConcurrentConnectionLifecycle(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+				ctx, cancel := context.WithTimeout(pcTestContext(r), 50*time.Millisecond)
 				defer cancel()
 				r.call(ctx, "robot-allowed", "lock", map[string]any{})
-				pcControlFor(r, "robot-allowed").tools()
+				pcControlFor(pcTestContext(r), r, "robot-allowed").tools()
 			}()
 		}
 		c.Close()
@@ -385,7 +393,7 @@ func TestPCRelayRejectsBinaryFrames(t *testing.T) {
 	}
 	conn = pcConnect(t, r, s)
 	done := make(chan error, 1)
-	go func() { _, err := r.call(context.Background(), "robot-allowed", "lock", map[string]any{}); done <- err }()
+	go func() { _, err := r.call(pcTestContext(r), "robot-allowed", "lock", map[string]any{}); done <- err }()
 	call := pcReadCall(t, conn)
 	raw, _ = json.Marshal(map[string]any{"type": "result", "id": call["id"], "ok": true, "message": "x", "data": map[string]any{}})
 	conn.WriteMessage(websocket.BinaryMessage, raw)
@@ -405,10 +413,10 @@ func TestPCProviderOnlyAttachesAuthorizedControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := defaultPCRelay
-	defaultPCRelay = newPCRelay(pcTestToken, "desktop", []string{"robot-allowed"})
+	defaultPCRelay = newPCRelay(pcTestToken, pcTestGatewayToken, "desktop", []string{"robot-allowed"})
 	defer func() { defaultPCRelay = old }()
 	for _, id := range []string{"robot-allowed", "other"} {
-		session, err := dialProvider(context.Background(), id, nil, RealtimeCallbacks{})
+		session, err := dialProvider(pcTestContext(defaultPCRelay), id, nil, RealtimeCallbacks{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -440,7 +448,7 @@ func TestPCChatBudgetMemoizationAndRobotBudget(t *testing.T) {
 		}
 	}()
 	c := newOpenAIClient("https://example.invalid", "test", "model", "", "", "", "")
-	c.pc = pcControlFor(r, "robot-allowed")
+	c.pc = pcControlFor(pcTestContext(r), r, "robot-allowed")
 	c.robot = &robotControl{emotion: func(string) error { return nil }, pose: func(RobotPose) error { return nil }}
 	round := 0
 	c.http = &http.Client{Transport: deepSeekTestTransport(func(req *http.Request) (*http.Response, error) {
@@ -507,7 +515,7 @@ func TestPCChatBudgetMemoizationAndRobotBudget(t *testing.T) {
 		data, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": message}}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data))), Header: make(http.Header)}, nil
 	})}
-	if _, err := c.Chat(context.Background(), nil, nil); err != nil {
+	if _, err := c.Chat(pcTestContext(r), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	conn.Close()

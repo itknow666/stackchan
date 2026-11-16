@@ -63,7 +63,7 @@ class StandaloneConfigTest(unittest.TestCase):
     def test_host_ports_are_separate_from_container_ports(self):
         compose = COMPOSE.read_text()
         launcher = LAUNCHER.read_text()
-        self.assertIn('"${STACKCHAN_WS_PORT:-12800}:12800"', compose)
+        self.assertIn('"127.0.0.1:${STACKCHAN_WS_PORT:-12800}:12800"', compose)
         self.assertIn('"127.0.0.1:${STACKCHAN_SETTINGS_PORT:-8099}:8099"', compose)
         self.assertIn('local_port: ${WS_PORT}', launcher)
         self.assertIn('settings_listen_address: ":8099"', launcher)

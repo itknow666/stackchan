@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -44,7 +43,7 @@ func TestPCActionArgumentsAndDynamicCapabilities(t *testing.T) {
 		}
 	}
 	r, s := newPCTestServer(t)
-	control := pcControlFor(r, "robot-allowed")
+	control := pcControlFor(pcTestContext(r), r, "robot-allowed")
 	if len(control.tools()) != 0 {
 		t.Fatal("offline PC advertised tools")
 	}
@@ -64,7 +63,7 @@ func TestPCActionArgumentsAndDynamicCapabilities(t *testing.T) {
 	if len(tools) != 1 || tools[0]["function"].(map[string]any)["name"] != "pc_open_app" {
 		t.Fatalf("advertised unavailable capability: %v", tools)
 	}
-	if _, err := control.dispatch(context.Background(), &pcTurn{}, "pc_lock", map[string]any{}); err == nil {
+	if _, err := control.dispatch(pcTestContext(r), &pcTurn{}, "pc_lock", map[string]any{}); err == nil {
 		t.Fatal("unadvertised tool was executed")
 	}
 	conn.Close()
@@ -90,16 +89,16 @@ func TestPCStrictJSON(t *testing.T) {
 func TestPCSearchRejectsNonPrintableBeforeRelay(t *testing.T) {
 	r, s := newPCTestServer(t)
 	conn := pcConnect(t, r, s)
-	control := pcControlFor(r, "robot-allowed")
+	control := pcControlFor(pcTestContext(r), r, "robot-allowed")
 	for _, query := range []string{"query\x7f", "query\u202e", "query\u200b", "query\u00a0", "query\u2028", "query\x00"} {
-		if _, err := control.dispatch(context.Background(), &pcTurn{}, "pc_search_web", map[string]any{"query": query}); err == nil {
+		if _, err := control.dispatch(pcTestContext(r), &pcTurn{}, "pc_search_web", map[string]any{"query": query}); err == nil {
 			t.Fatalf("non-printable query accepted: %q", query)
 		}
 	}
 	for _, query := range []string{"普通中文", "English query", " 中文 English with ASCII spaces "} {
 		done := make(chan error, 1)
 		go func() {
-			_, err := control.dispatch(context.Background(), &pcTurn{}, "pc_search_web", map[string]any{"query": query})
+			_, err := control.dispatch(pcTestContext(r), &pcTurn{}, "pc_search_web", map[string]any{"query": query})
 			done <- err
 		}()
 		// An invalid earlier query would be observed here before this valid one.

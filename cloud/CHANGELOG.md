@@ -2,6 +2,7 @@
 
 ## Agent computer relay (2026-11-16, opt-in)
 
+- Required a distinct gateway-only assertion token and request-scoped robot authorization; standalone backend publishing now defaults to host loopback.
 - Added an authenticated outgoing-PC WebSocket relay with explicit robot authorization, live allowlisted capabilities, bounded pending requests and lifecycle cleanup.
 - Added compatible voice-model computer tools with validated arguments, actual execution results, simulation markers, per-turn limits and duplicate-action suppression.
 - Kept computer tools available after the independent robot expression/pose budget is exhausted; PC arguments and results are excluded from tool logs.
