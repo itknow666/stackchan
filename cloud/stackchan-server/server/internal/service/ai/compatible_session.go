@@ -108,7 +108,7 @@ func (s *compatibleSession) completeTurn(ctx context.Context, pcm []int16) {
 	// never arrives and the device stays deaf for the rest of the session.
 	spoke := false
 	defer func() {
-		if !spoke && s.cb.OnStop != nil {
+		if !spoke && ctx.Err() == nil && s.cb.OnStop != nil {
 			s.cb.OnStop()
 		}
 	}()
@@ -157,12 +157,22 @@ func (s *compatibleSession) completeTurn(ctx context.Context, pcm []int16) {
 	if s.cb.OnText != nil {
 		s.cb.OnText(reply)
 	}
+	pcmReply := clip.PCM
+	if !recorded {
+		pcmReply, err = s.ttsClient.Speak(ctx, reply)
+		if err != nil {
+			g.Log().Warningf(gctx.New(), "[COMPAT] TTS: %v", err)
+			return
+		}
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	// The speaking phase reports its own end through OnStop below.
 	spoke = true
 	if s.cb.OnStart != nil {
 		s.cb.OnStart()
 	}
-	pcmReply := clip.PCM
 	local := LocalAudioUnavailable
 	if recorded && clip.PackID != "" && s.cb.OnLocalClip != nil {
 		local = s.cb.OnLocalClip(ctx, clip.PackID, clip.ID)
@@ -172,13 +182,17 @@ func (s *compatibleSession) completeTurn(ctx context.Context, pcm []int16) {
 		// local request stop or replay audio into a later turn.
 		return
 	}
-	if !recorded {
-		pcmReply, err = s.ttsClient.Speak(ctx, reply)
+	if local == LocalAudioUnavailable && len(pcmReply) > 0 {
+		if s.cb.OnAudioContext != nil {
+			if err = s.cb.OnAudioContext(ctx, pcmReply); err != nil && ctx.Err() == nil {
+				g.Log().Warningf(gctx.New(), "[COMPAT] playback: %v", err)
+			}
+		} else if s.cb.OnAudio != nil {
+			s.cb.OnAudio(pcmReply)
+		}
 	}
-	if err != nil {
-		g.Log().Warningf(gctx.New(), "[COMPAT] TTS: %v", err)
-	} else if local == LocalAudioUnavailable && len(pcmReply) > 0 && s.cb.OnAudio != nil {
-		s.cb.OnAudio(pcmReply)
+	if ctx.Err() != nil {
+		return
 	}
 	if local == LocalAudioInterrupted {
 		g.Log().Warning(gctx.New(), "[COMPAT] local recording interrupted; full recording will not be replayed")

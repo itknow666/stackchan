@@ -1,0 +1,20 @@
+{
+  "endpoint": "wss://your-server.example/dania/pc/ws",
+  "token": "",
+  "pc_id": "desktop",
+  "dry_run": true,
+  "actions": ["codex_start", "codex_status", "codex_cancel"],
+  "apps": [],
+  "projects": [
+    {"id": "profile", "name": "默认工作区", "path": "C:/Projects"}
+  ],
+  "state_file": "private/status.json",
+  "codex": {
+    "backend": "desktop",
+    "desktop_workspace": "C:/Projects",
+    "desktop_node": "C:/Program Files/nodejs/node.exe",
+    "desktop_server": "C:/Codex/plugins/codex-app-tools/server.mjs",
+    "desktop_caller_thread": "00000000-0000-0000-0000-000000000000",
+    "tasks_file": "private/codex-tasks.json"
+  }
+}

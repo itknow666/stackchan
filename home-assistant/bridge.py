@@ -3,6 +3,7 @@ import asyncio, json, logging, math, re, subprocess, time, wave, winsound
 from pathlib import Path
 import paho.mqtt.client as mqtt
 from bleak import BleakClient, BleakScanner
+from pc_state import read_pc_state
 
 BASE = Path(__file__).resolve().parent
 ROOT = BASE.parent
@@ -12,23 +13,18 @@ PREVIEW_CLEANUP_TIMEOUT_SECONDS=2
 UUID = 'e2e5e5e{}-1234-5678-1234-56789abcdef0'
 SAFE_ID=re.compile(r'[A-Za-z0-9_-]{1,64}\Z')
 PC_ACTIONS={'open_app':'打开指定软件','open_project':'打开项目文件夹','set_volume':'电脑音量',
-            'media':'媒体控制','search_web':'网页搜索','lock':'锁定电脑'}
+            'media':'媒体控制','search_web':'网页搜索','lock':'锁定电脑','codex_start':'交给 Codex 工作',
+            'codex_status':'查询 Codex 任务','codex_cancel':'取消 Codex 任务'}
 
-def pc_status(path,now=None):
+def pc_status(raw):
     """Read only a bounded, credential-free projection of the companion state."""
     offline={'online':False,'mode':'未知','ready':False,'actions':'无','apps':'无','projects':'无'}
     try:
-        if path.stat().st_size>32768: return offline
-        raw=json.loads(path.read_text(encoding='utf-8'))
-        if not isinstance(raw,dict): return offline
-        now=time.time()*1000 if now is None else now
-        stamp=raw.get('updated_at_ms')
-        if (raw.get('version')!=1 or type(stamp)!=int or not 0<=now-stamp<=15000 or
-            type(raw.get('connected'))!=bool or type(raw.get('dry_run'))!=bool): return offline
+        if raw is None: return offline
         caps=raw.get('capabilities',{})
         if not isinstance(caps,dict): return offline
         actions=caps.get('actions',[])
-        if not isinstance(actions,list) or len(actions)>6 or any(a not in PC_ACTIONS for a in actions): return offline
+        if not isinstance(actions,list) or len(actions)>len(PC_ACTIONS) or any(a not in PC_ACTIONS for a in actions): return offline
         def names(group):
             entries=caps.get(group,[])
             if not isinstance(entries,list) or len(entries)>64: raise ValueError('Invalid capability list')
@@ -42,7 +38,7 @@ def pc_status(path,now=None):
                 'ready':raw['connected'] and not raw['dry_run'] and bool(actions),
                 'actions':'、'.join(PC_ACTIONS[a] for a in actions) or '无',
                 'apps':names('apps'),'projects':names('projects')}
-    except (OSError,ValueError,TypeError): return offline
+    except (ValueError,TypeError): return offline
 FACES = {
     '默认': {'leftEye':{'weight':100,'rotation':0},'rightEye':{'weight':100,'rotation':0},'mouth':{'weight':0}},
     '微笑': {'leftEye':{'weight':72,'rotation':1550},'rightEye':{'weight':72,'rotation':-1550},'mouth':{'weight':35}},
@@ -95,6 +91,15 @@ class Bridge:
         self.pack=json.loads(manifest.read_text(encoding='utf-8')) if manifest.exists() else {'rules':[]}
         self.rules={Path(r['file']).stem:r for r in self.pack['rules']}
         self.client=None
+        self.codex_notifier=None
+        notifications=self.cfg.get('codex_notifications')
+        if notifications and notifications.get('enabled',False):
+            from codex_notifications import CompletionNotifier
+            self.codex_notifier=CompletionNotifier(notifications)
+            state_path=self.cfg.get('pc_assistant',{}).get('status_file')
+            forbidden={(BASE/'local-config.json').resolve()}
+            if isinstance(state_path,str): forbidden.add((BASE/Path(state_path)).resolve())
+            if self.codex_notifier.path.resolve() in forbidden: raise ValueError('通知去重文件须独立保存')
         self.connect_lock=asyncio.Lock()
         self.config_lock=asyncio.Lock()
         self.config_request=time.time_ns()%2147483646
@@ -274,6 +279,25 @@ class Bridge:
             for target,source in [('storage_clips','clips'),('storage_free','free_mb'),('storage_total','total_mb')]: self.publish(target,reply[source])
             return reply
 
+    async def play_completion(self,clip):
+        # The firmware accepts local playback only while Agent is idle. A
+        # definitive preplay rejection can be tried later; any other outcome
+        # is final for this task, including accepted playback with lost ACK.
+        if self.robot_preview_task and not self.robot_preview_task.done(): return 'unavailable'
+        async with asyncio.timeout(24), self.config_lock:
+            if not (self.client and self.client.is_connected): return 'unavailable'
+            request=self.next_request()
+            await self.write('3',{'cmd':'playLocalClip','id':clip,'request_id':request})
+            accepted=False
+            while True:
+                try: reply=await self.config_reply(request,'local_clip',.3)
+                except TimeoutError: continue
+                state=reply.get('state')
+                if state in ('completed','unavailable','failed','cancelled'): return 'unknown' if accepted and state=='unavailable' else state
+                if state=='accepted': accepted=True
+                if state not in ('pending','accepted'): return 'unknown'
+                await asyncio.sleep(.1)
+
     async def robot_preview(self,key):
         request=None
         terminal=False
@@ -366,7 +390,7 @@ class Bridge:
             await self.write('1',motion_payload(key,payload))
             self.publish(key,float(payload))
         elif key=='volume':
-            await self.volume_exchange(volume_value(payload))
+            volume=await self.volume_exchange(payload)
         elif key=='face':
             if payload not in FACES: raise ValueError('未知脸部形状')
             await self.write('2',FACES[payload]); self.publish(key,payload)
@@ -400,7 +424,7 @@ class Bridge:
         elif key=='voice_pack': result='达妮娅录音触发已'+('开启' if payload=='ON' else '关闭；恢复 DeepSeek 语音')
         elif key=='connect': result='蓝牙已连接；可同时使用 AI Agent 聊天与遥控'
         elif key=='disconnect': result='蓝牙已断开并暂停自动重连；AI Agent 聊天照常使用'
-        elif key=='volume': result='机器人音量已设为'+str(volume_value(payload))+'%'+('（静音）' if volume_value(payload)==0 else '')
+        elif key=='volume': result='机器人音量已设为'+str(volume)+'%'+('（静音）' if volume==0 else '')
         else: result='控制指令已发送，请在机器人上确认效果'
         self.publish('last_result',result)
 
@@ -446,11 +470,16 @@ class Bridge:
     async def poll_pc(self):
         config=self.cfg.get('pc_assistant',{})
         path=config.get('status_file') if isinstance(config,dict) else None
+        path=(BASE/Path(path)).resolve() if isinstance(path,str) and path else None
         while True:
             status={'online':False,'mode':'未配置','ready':False,'actions':'无','apps':'无','projects':'无'}
-            if isinstance(path,str) and path:
-                try: status=await asyncio.to_thread(pc_status,(BASE/Path(path)).resolve())
-                except (ValueError,OSError): pass
+            snapshot=None
+            if path:
+                snapshot=await asyncio.to_thread(read_pc_state,path)
+                status=pc_status(snapshot)
+            if self.codex_notifier:
+                await self.codex_notifier.poll(snapshot,
+                    bool(self.client and self.client.is_connected),self.play_completion)
             self.publish('pc_online','ON' if status['online'] else 'OFF')
             self.publish('pc_ready','ON' if status['ready'] else 'OFF')
             for key in ('mode','actions','apps','projects'): self.publish('pc_'+key,status[key])

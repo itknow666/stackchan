@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import subprocess
 from urllib.parse import urlencode
 
 from .config import Config
+from .codex_tasks import CodexTasks
+from .desktop_tasks import DesktopCodexTasks
 
 
 def validate_action(config: Config, action, args):
@@ -14,10 +17,20 @@ def validate_action(config: Config, action, args):
     if not isinstance(args, dict):
         raise ValueError("Arguments must be an object")
     fields = {"open_app": {"id"}, "open_project": {"id"}, "set_volume": {"value"},
-              "media": {"command"}, "search_web": {"query"}, "lock": set()}[action]
+              "media": {"command"}, "search_web": {"query"}, "lock": set(), "codex_start": {"project", "task"},
+              "codex_status": {"task_id"}, "codex_cancel": {"task_id"}}[action]
     if args.keys() != fields:
         raise ValueError("Arguments do not match the action")
-    if action in {"open_app", "open_project"}:
+    if action == "codex_start":
+        if not config.codex or not isinstance(args["project"], str) or args["project"] not in config.projects:
+            raise ValueError("Unknown Codex project")
+        task = args["task"]
+        if not isinstance(task, str) or not 1 <= len(task.strip()) <= 4000 or any(ord(c) < 32 and c not in "\n\t" for c in task):
+            raise ValueError("Codex task must contain one to four thousand characters")
+    elif action in {"codex_status", "codex_cancel"}:
+        if not config.codex or not isinstance(args["task_id"], str) or (args["task_id"] != "latest" and not re.fullmatch(r"[a-f0-9]{32}", args["task_id"])):
+            raise ValueError("Invalid Codex task ID")
+    elif action in {"open_app", "open_project"}:
         entries = config.apps if action == "open_app" else config.projects
         if not isinstance(args["id"], str) or args["id"] not in entries:
             raise ValueError("Unknown local allowlist id")
@@ -39,12 +52,17 @@ class NativeExecutor:
 
     def __init__(self, config: Config):
         self.config = config
+        manager = DesktopCodexTasks if config.codex and config.codex.get("backend") == "desktop" else CodexTasks
+        self.codex_tasks = manager(config) if config.codex else None
 
     async def execute(self, action, args, before_effect=lambda: None):
         validate_action(self.config, action, args)
         if self.config.dry_run:
             before_effect()
             return "Simulated; no desktop action was performed", {"simulated": True}
+        if action.startswith("codex_"):
+            before_effect()
+            return await self.codex_tasks.execute(action, args)
         if os.name != "nt":
             raise RuntimeError("Desktop execution requires Windows")
         if action == "open_app":

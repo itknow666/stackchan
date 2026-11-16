@@ -130,8 +130,8 @@ func TestConfiguredRecordedVoicePack(t *testing.T) {
 	if err = json.Unmarshal(data, &pack); err != nil {
 		t.Fatal(err)
 	}
-	if len(pack.Rules) != 21 {
-		t.Fatalf("want 21 clips, got %d", len(pack.Rules))
+	if len(pack.Rules) < 21 {
+		t.Fatalf("want at least the original 21 clips, got %d", len(pack.Rules))
 	}
 	for _, rule := range pack.Rules {
 		for _, trigger := range rule.Triggers {

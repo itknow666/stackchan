@@ -30,7 +30,7 @@ const pcMaxPending = 4
 const pcGatewayHeader = "X-Stackchan-PC-Device-Token"
 
 var pcIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
-var pcActions = map[string]bool{"open_app": true, "open_project": true, "set_volume": true, "media": true, "search_web": true, "lock": true}
+var pcActions = map[string]bool{"open_app": true, "open_project": true, "set_volume": true, "media": true, "search_web": true, "lock": true, "codex_start": true, "codex_status": true, "codex_cancel": true}
 
 type pcItem struct {
 	ID   string `json:"id"`

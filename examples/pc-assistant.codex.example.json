@@ -1,0 +1,17 @@
+{
+  "endpoint": "wss://your-server.example.com/dania/pc/ws",
+  "token": "",
+  "pc_id": "desktop",
+  "dry_run": true,
+  "actions": ["open_app", "open_project", "set_volume", "media", "search_web", "lock", "codex_start", "codex_status", "codex_cancel"],
+  "apps": [],
+  "projects": [{"id": "stackchan", "name": "机器人项目", "path": "C:/Projects/stackchan"}],
+  "state_file": "private/status.json",
+  "codex": {
+    "executable": "C:/Tools/Codex/codex.exe",
+    "tasks_file": "private/codex-tasks.json",
+    "sandbox": "read-only",
+    "home": "C:/Users/YourName/.codex",
+    "timeout_seconds": 1800
+  }
+}

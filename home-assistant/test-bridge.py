@@ -4,6 +4,7 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).parent))
 import bridge as bridge_module
 from bridge import Bridge, motion_payload, volume_value, TOPIC, cloud_status, UUID, pc_status
+from pc_state import read_pc_state
 import paho.mqtt.client as mqtt
 
 class Contracts(unittest.TestCase):
@@ -67,15 +68,15 @@ class Contracts(unittest.TestCase):
                  'endpoint':'PRIVATE_ENDPOINT','token':'PRIVATE_TOKEN','query':'PRIVATE_QUERY',
                  'capabilities':{'actions':['open_app','set_volume'],'apps':[{'id':'b','name':'浏览器','executable':'PRIVATE_PATH'}],'projects':[]}}
             path.write_text(json.dumps(raw),encoding='utf-8')
-            status=pc_status(path,100100)
+            status=pc_status(read_pc_state(path,100100))
             self.assertTrue(status['online']);self.assertTrue(status['ready'])
             self.assertEqual(status['apps'],'浏览器')
             self.assertNotIn('PRIVATE',json.dumps(status))
-            self.assertFalse(pc_status(path,116000)['online'])
-            self.assertFalse(pc_status(path,99999)['online'])
+            self.assertFalse(pc_status(read_pc_state(path,116000))['online'])
+            self.assertFalse(pc_status(read_pc_state(path,99999))['online'])
             raw['dry_run']=True;path.write_text(json.dumps(raw),encoding='utf-8')
-            self.assertFalse(pc_status(path,100100)['ready'])
-            path.write_text('[]');self.assertFalse(pc_status(path,100100)['online'])
+            self.assertFalse(pc_status(read_pc_state(path,100100))['ready'])
+            path.write_text('[]');self.assertFalse(pc_status(read_pc_state(path,100100))['online'])
 
     def test_storage_and_volume_exchange_share_one_mailbox(self):
         b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'});sent=[];published=[]

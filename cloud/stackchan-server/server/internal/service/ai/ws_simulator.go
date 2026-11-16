@@ -182,32 +182,11 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 		},
 
 		OnAudio: func(pcm []int16) { // encode and enqueue; pacingLoop sends at 60ms
-			if !s.activity.responding(time.Now()) {
-				return
+			if err := s.enqueueAudio(ctx, pcm); err != nil && ctx.Err() == nil {
+				g.Log().Warningf(ctx, "[WS] device=%s encode/delivery: %v", deviceID, err)
 			}
-			if atomic.CompareAndSwapInt32(&s.firstAudioLogged, 0, 1) {
-				s.logTurnLatency(ctx, "first_audio")
-			}
-			s.mu.Lock()
-			enc := s.opusEnc
-			s.mu.Unlock()
-			if enc == nil {
-				return
-			}
-			frames, err := enc.Encode(pcm)
-			if err != nil {
-				g.Log().Warningf(ctx, "[WS] device=%s encode: %v", deviceID, err)
-				return
-			}
-			for _, frame := range frames {
-				select {
-				case s.frameQueue <- frame:
-				default:
-					g.Log().Warningf(ctx, "[WS] device=%s frame queue full, dropping frame", deviceID)
-				}
-			}
-			s.startPlayback(false)
 		},
+		OnAudioContext: s.enqueueAudio,
 
 		OnStart: func() {
 			if !s.activity.responding(time.Now()) {
@@ -259,7 +238,8 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 			for _, frame := range enc.Flush() {
 				select {
 				case s.frameQueue <- frame:
-				default:
+				case <-ctx.Done():
+					return
 				}
 			}
 			select {
@@ -306,6 +286,42 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 	g.Log().Infof(ctx, "[WS] device=%s session closed", deviceID)
 	rt.Close()
 	closeHAClient(ha)
+}
+
+// Wait for the bounded queue instead of discarding the end of a long reply.
+// Start playback while filling the prebuffer, before a large response can block.
+func (s *wsSession) enqueueAudio(ctx context.Context, pcm []int16) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !s.activity.responding(time.Now()) {
+		return context.Canceled
+	}
+	if atomic.CompareAndSwapInt32(&s.firstAudioLogged, 0, 1) {
+		s.logTurnLatency(ctx, "first_audio")
+	}
+	s.mu.Lock()
+	enc := s.opusEnc
+	s.mu.Unlock()
+	if enc == nil {
+		return nil
+	}
+	frames, err := enc.Encode(pcm)
+	if err != nil {
+		return err
+	}
+	for _, frame := range frames {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case s.frameQueue <- frame:
+			s.startPlayback(false)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 func closeHAClient(ha *haWSClient) {

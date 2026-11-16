@@ -39,6 +39,8 @@ class Client:
                  "dry_run": self.config.dry_run, "pending": self.dispatcher.pending,
                  "capabilities": self.config.hello()["capabilities"],
                  "updated_at_ms": int(time.time() * 1000), "last_result": self.last_result}
+        manager = getattr(self.dispatcher.executor, "codex_tasks", None)
+        if manager: state["codex_tasks"] = manager.projection()
         path = self.config.state_file
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix(".tmp")
@@ -95,7 +97,6 @@ class Client:
                     task.cancel()
             await asyncio.gather(*(t for t in (reader, state_task) if t), return_exceptions=True)
             await self.dispatcher.stop()
-            self.connected = False
             self.write_state()
 
     async def run(self):
@@ -124,6 +125,8 @@ class Client:
                 await asyncio.sleep(delay + random.uniform(0, delay / 4))
                 delay = min(delay * 2, 30)
         finally:
+            manager = getattr(self.dispatcher.executor, "codex_tasks", None)
+            if manager: await manager.close()
             await self.dispatcher.stop()
             self.connected = False
             with contextlib.suppress(OSError):
