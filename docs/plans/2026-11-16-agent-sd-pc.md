@@ -37,3 +37,7 @@ Negotiate manifest/version/local-audio capability before server requests clip ID
 ## Integration and release
 
 Run CTest, Windows/client tests, Go full tests/build, YAML and shell syntax checks, private-content scan and git diff check. Review spec then quality per task, final integration review. Stage hardware update in inactive slot with rollback backup, observe stable Agent auto-entry/BLE and SD mount. Save human-only voice/touch/screen observations as pending when user is asleep. Install current-user startup for PC client with secrets in ignored private config; do not open inbound PC port. Update docs with actual verified results; commit/push a reviewable feature branch and only promote stable tested changes to main. Keep pending features and verification explicit.
+
+## Execution record
+
+Tasks one through four and final integration review passed specification and quality checks. Firmware, cloud relay, PC companion and console were installed in the private runtime on 2026-11-16, preserving rollback and private configuration. Automated and muted hardware evidence is recorded in [publication checks](../publication-checks.md). Human listening, maintenance touch and physical cold boot remain pending; arbitrary desktop/file/coding automation is outside this iteration.
