@@ -163,13 +163,25 @@ func (s *compatibleSession) completeTurn(ctx context.Context, pcm []int16) {
 		s.cb.OnStart()
 	}
 	pcmReply := clip.PCM
+	local := LocalAudioUnavailable
+	if recorded && clip.PackID != "" && s.cb.OnLocalClip != nil {
+		local = s.cb.OnLocalClip(ctx, clip.PackID, clip.ID)
+	}
+	if ctx.Err() != nil {
+		// The abort/disconnect owner ends playback; never let a cancelled old
+		// local request stop or replay audio into a later turn.
+		return
+	}
 	if !recorded {
 		pcmReply, err = s.ttsClient.Speak(ctx, reply)
 	}
 	if err != nil {
 		g.Log().Warningf(gctx.New(), "[COMPAT] TTS: %v", err)
-	} else if len(pcmReply) > 0 && s.cb.OnAudio != nil {
+	} else if local == LocalAudioUnavailable && len(pcmReply) > 0 && s.cb.OnAudio != nil {
 		s.cb.OnAudio(pcmReply)
+	}
+	if local == LocalAudioInterrupted {
+		g.Log().Warning(gctx.New(), "[COMPAT] local recording interrupted; full recording will not be replayed")
 	}
 	if s.cb.OnStop != nil {
 		s.cb.OnStop()

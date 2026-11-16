@@ -4,6 +4,9 @@
   "mqtt_user": "stackchan",
   "mqtt_password": "replace-with-your-local-password",
   "voice_pack_dir": "voice-pack",
+  "pc_assistant": {
+    "status_file": "../pc-assistant/private/status.json"
+  },
   "cloud": {
     "enabled": false,
     "host": "your-server.example.com",

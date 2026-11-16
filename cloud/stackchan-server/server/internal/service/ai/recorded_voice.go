@@ -11,12 +11,14 @@ import (
 )
 
 type recordedVoiceRule struct {
+	ID       string   `json:"id,omitempty"`
 	File     string   `json:"file"`
 	Reply    string   `json:"reply"`
 	Triggers []string `json:"triggers"`
 }
 
 type recordedVoicePack struct {
+	PackID     string              `json:"pack_id,omitempty"`
 	Enabled    bool                `json:"enabled"`
 	SampleRate int                 `json:"sample_rate"`
 	Channels   int                 `json:"channels"`
@@ -26,8 +28,9 @@ type recordedVoicePack struct {
 }
 
 type recordedVoice struct {
-	Reply string
-	PCM   []int16
+	PackID, ID string
+	Reply      string
+	PCM        []int16
 }
 
 func normalizeVoicePhrase(text string) string {
@@ -113,5 +116,11 @@ func recordedVoiceForText(dir, text string) (recordedVoice, bool, error) {
 	for i := range pcm {
 		pcm[i] = int16(binary.LittleEndian.Uint16(data[i*2:]))
 	}
-	return recordedVoice{Reply: matched.Reply, PCM: pcm}, true, nil
+	clip := recordedVoice{Reply: matched.Reply, PCM: pcm}
+	// Metadata is optional. Old manifests and invalid optional metadata retain
+	// the original network PCM behavior rather than losing the recording.
+	if validLocalAudioID(pack.PackID) && validLocalAudioID(matched.ID) {
+		clip.PackID, clip.ID = pack.PackID, matched.ID
+	}
+	return clip, true, nil
 }

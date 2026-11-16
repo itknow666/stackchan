@@ -45,12 +45,13 @@ var upgrader = websocket.Upgrader{
 const frameQueueSize = 600 // ~36 seconds of audio headroom
 
 type wsSession struct {
-	conn      *websocket.Conn
-	deviceID  string
-	sessionID string
-	activity  *conversationActivity
-	rt        RealtimeSession
-	opusDec   *opus.Decoder // device input decoder (16kHz, reset per utterance)
+	localAudio localAudioLink
+	conn       *websocket.Conn
+	deviceID   string
+	sessionID  string
+	activity   *conversationActivity
+	rt         RealtimeSession
+	opusDec    *opus.Decoder // device input decoder (16kHz, reset per utterance)
 
 	mu               sync.Mutex         // protects opusEnc and isListening
 	opusEnc          *opusStreamEncoder // non-nil only while model is speaking
@@ -132,6 +133,9 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 	// Wire provider callbacks → device WebSocket writes. Same callbacks for any
 	// backend (OpenAI Realtime, Gemini Live, ...) — see provider.go.
 	cb := RealtimeCallbacks{
+		OnLocalClip: func(turnCtx context.Context, pack, clip string) localAudioOutcome {
+			return s.localAudio.play(turnCtx, pack, clip, func() { s.startPlayback(true) }, s.sendJSON)
+		},
 		OnClose: func() {
 			// Provider session ended (error or normal). Close the device
 			// connection so run() exits and the device reconnects cleanly
@@ -371,7 +375,9 @@ func (s *wsSession) startPlayback(force bool) {
 		emotion = "neutral"
 	}
 	pose := s.robotPose
-	s.mu.Unlock()
+	// Keep the state mutex through the start writes: a concurrent local
+	// request must not observe playbackStarted before tts:start is on the wire.
+	defer s.mu.Unlock()
 	if pose != nil {
 		_ = s.sendJSON(map[string]any{"type": "dania_pose", "yaw": pose.Yaw, "pitch": pose.Pitch, "roll": pose.Roll})
 	}
@@ -392,6 +398,7 @@ func (s *wsSession) drainFrameQueue() {
 
 func (s *wsSession) run(ctx context.Context) {
 	defer s.conn.Close()
+	defer s.localAudio.close()
 	for {
 		msgType, data, err := s.conn.ReadMessage()
 		if err != nil {
@@ -449,7 +456,10 @@ func (s *wsSession) run(ctx context.Context) {
 
 		switch msgTypeStr {
 		case "hello":
+			s.localAudio.negotiate(msg["local_audio"])
 			s.handleHello(ctx)
+		case "local_audio":
+			s.localAudio.acknowledge(msg)
 		case "listen":
 			s.handleListen(ctx, msg)
 		case "abort":

@@ -20,7 +20,7 @@ idf.py build
 
 个人服务地址放入被忽略的 `firmware/sdkconfig.defaults.local`。`CONFIG_STACKCHAN_SERVER_URL` 是原 StackChan HAL 后端，`CONFIG_OTA_URL` 是启动接入地址，二者不能当作同一个接口。当前 Agent 跳过启动 OTA 检查，**实际语音连接使用 NVS 的 `websocket/url`、token、version**；仅修改 OTA URL 不会自动重新发现服务。初次接入需先完成原固件的配置/接入流程，或由理解本机 NVS 布局的人写入正确的 WebSocket 配置，再使用本固件。
 
-刷写前备份本机完整闪存和分区表。公开仓库不提供个人备份；不要把别人的 NVS 写入自己的设备。上游 `cloud/flash_nvs.py` 会替换整块 NVS，不适合保留现有 Wi-Fi 和设备身份的直接升级。本次整理不执行任何刷写。
+刷写前备份本机完整闪存和分区表。公开仓库不提供个人备份；不要把别人的 NVS 写入自己的设备。上游 `cloud/flash_nvs.py` 会替换整块 NVS，不适合保留现有 Wi-Fi 和设备身份的直接升级。升级时核验目标应用分区并保留可回退镜像，避免完整工厂刷写覆盖个人配置。
 
 ## 云端服务
 
@@ -56,3 +56,11 @@ python home-assistant/bridge.py
 `cloud.enabled` 默认 false，基本遥控不依赖 SSH。要启用云端录音开关，填写自己的主机、身份文件和已核验的 known_hosts，配置具备相应权限的受限管理账号；`StrictHostKeyChecking` 保持开启。
 
 若希望复现本项目专用的 WSL Ubuntu-22.04 安装，可检查并手动运行 `setup-local.py`、`install-specialization.py` 和 `build-dashboard.py --install`，最后运行 `launcher.py`。这些脚本针对专用环境，会配置回环 MQTT、创建名为 stackchan-homeassistant 的容器和 `/opt/stackchan-homeassistant` 目录，不应直接套用到已有复杂的 Home Assistant 部署。
+
+## Agent、SD 与电脑助手
+
+开机直接进入 Agent，不编入独立娱乐应用。底部上滑进入精简维护页，可返回 Agent、调整配网和音量或关机；原有自动固件检查保持禁用。SD 文件格式和资源导入见[音频说明](audio.md)，首次挂载失败不会格式化卡，仍保留云端与嵌入音频路径。
+
+Windows 反向控制安装和允许清单见 [pc-assistant/README.md](../pc-assistant/README.md)。必须给电脑连接和可信网关声明分别设置独立随机密钥，并在云端授权目标机器人；不要把模型 API Key 当电脑密钥。服务端接收端口保持回环，网关覆盖客户端伪造的认证声明。电脑助手主动建立 WSS，不在电脑增加入站端口。先使用默认模拟模式检查结果，再按本机实际需要开放指定能力。
+
+在桥接私有配置增加 `pc_assistant.status_file` 指向电脑助手实际状态文件，默认可用 `../pc-assistant/private/status.json`。助手每两秒写入只含连接、模拟、待处理结果及安全能力名称的状态；桥接超过十五秒未更新就显示离线，只发布允许动作与软件或项目名称，不读取或发布密钥、路径、搜索词和参数。SD、音量和试听共享一个 BLE 配置交换锁，试听期间状态轮询等待，停止按钮仍可请求取消。

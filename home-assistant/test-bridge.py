@@ -1,7 +1,7 @@
 import asyncio, json, sys, threading, time, unittest, tempfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).parent))
-from bridge import Bridge, motion_payload, volume_value, TOPIC, cloud_status, UUID
+from bridge import Bridge, motion_payload, volume_value, TOPIC, cloud_status, UUID, pc_status
 import paho.mqtt.client as mqtt
 
 class Contracts(unittest.TestCase):
@@ -57,6 +57,96 @@ class Contracts(unittest.TestCase):
         b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'})
         b.on_message(None,None,type('Message',(),{'retain':True,'payload':b'PRESS','topic':TOPIC+'/command/connect'})())
         self.assertTrue(b.queue.empty())
+
+    def test_pc_status_is_fresh_and_never_exposes_private_fields(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'status.json'
+            raw={'version':1,'connected':True,'dry_run':False,'updated_at_ms':100000,
+                 'endpoint':'PRIVATE_ENDPOINT','token':'PRIVATE_TOKEN','query':'PRIVATE_QUERY',
+                 'capabilities':{'actions':['open_app','set_volume'],'apps':[{'id':'b','name':'浏览器','executable':'PRIVATE_PATH'}],'projects':[]}}
+            path.write_text(json.dumps(raw),encoding='utf-8')
+            status=pc_status(path,100100)
+            self.assertTrue(status['online']);self.assertTrue(status['ready'])
+            self.assertEqual(status['apps'],'浏览器')
+            self.assertNotIn('PRIVATE',json.dumps(status))
+            self.assertFalse(pc_status(path,116000)['online'])
+            self.assertFalse(pc_status(path,99999)['online'])
+            raw['dry_run']=True;path.write_text(json.dumps(raw),encoding='utf-8')
+            self.assertFalse(pc_status(path,100100)['ready'])
+            path.write_text('[]');self.assertFalse(pc_status(path,100100)['online'])
+
+    def test_storage_and_volume_exchange_share_one_mailbox(self):
+        b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'});sent=[];published=[]
+        b.publish=lambda *v:published.append(v)
+        async def write(suffix,data): sent.append(data)
+        b.write=write
+        class Device:
+            is_connected=True
+            async def read_gatt_char(self,uuid):
+                d=sent[-1]
+                if d['cmd']=='getVolume': return json.dumps({'cmd':'volume','request_id':d['request_id'],'value':53}).encode()
+                return json.dumps({'cmd':'storage','request_id':d['request_id'],'mounted':True,'valid':True,'pack_id':'test-pack','clips':31,'total_mb':29812,'free_mb':29811}).encode()
+        b.client=Device()
+        async def check():
+            volume,storage=await asyncio.gather(b.volume_exchange(),b.storage_exchange())
+            self.assertEqual(volume,53);self.assertEqual(storage['clips'],31)
+        asyncio.run(check())
+        self.assertEqual([d['cmd'] for d in sent],['getVolume','getStorageInfo'])
+        self.assertNotEqual(sent[0]['request_id'],sent[1]['request_id'])
+        self.assertIn(('storage_status','资源包有效'),published)
+
+    def test_robot_preview_uses_status_and_completion_not_enqueue(self):
+        b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'});sent=[];published=[]
+        b.rules={'hello':{'file':'hello.pcm','triggers':['你好']}}
+        b.publish=lambda *v:published.append(v)
+        async def write(suffix,data): sent.append(data)
+        b.write=write
+        class Device:
+            is_connected=True
+            reads=0
+            async def read_gatt_char(self,uuid):
+                self.reads+=1
+                return json.dumps({'cmd':'local_clip','request_id':sent[-1]['request_id'],
+                                   'state':['pending','accepted','completed'][min(self.reads-1,2)]}).encode()
+        b.client=Device()
+        asyncio.run(b.robot_preview('hello'))
+        self.assertEqual(sent[0]['cmd'],'playLocalClip')
+        self.assertEqual(sent[-1]['cmd'],'cancelLocalClip')
+        self.assertEqual(sum(d['cmd']=='playLocalClip' for d in sent),1)
+        self.assertIn(('last_result','机器人 SD 试听已播放完成'),published)
+
+    def test_robot_preview_stop_does_not_replay_and_bad_ids_rejected(self):
+        b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'});b.rules={'hello':{'file':'hello.pcm'},'bad':{'id':'../secret'}}
+        sent=[];published=[];b.publish=lambda *v:published.append(v)
+        class Device:
+            is_connected=True
+            cancelled=False
+            latest=None
+            async def write(self,suffix,data):
+                sent.append(data);self.latest=data
+                def consume():
+                    if self.latest is data and data['cmd']=='cancelLocalClip': self.cancelled=True
+                asyncio.get_running_loop().call_later(.02,consume)
+            async def read_gatt_char(self,uuid):
+                return json.dumps({'cmd':'local_clip','request_id':sent[-1]['request_id'],'state':'cancelled' if self.cancelled else 'accepted'}).encode()
+        b.client=Device();b.write=b.client.write;b.robot_preview_cancel.set()
+        asyncio.run(b.robot_preview('hello'))
+        self.assertEqual(sum(d['cmd']=='playLocalClip' for d in sent),1)
+        self.assertTrue(any(d['cmd']=='cancelLocalClip' for d in sent))
+        self.assertIn(('last_result','机器人试听已停止'),published)
+        async def check():
+            with self.assertRaises(ValueError): await b.command('robot_preview','bad')
+        asyncio.run(check())
+
+    def test_storage_old_firmware_and_disconnect_clear_state(self):
+        b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'});published=[]
+        b.publish=lambda *v:published.append(v)
+        async def write(*args): pass
+        async def no_reply(*args): raise TimeoutError()
+        b.write=write;b.config_reply=no_reply
+        self.assertIsNone(asyncio.run(b.storage_exchange()))
+        self.assertIn(('storage_status','未知或固件不支持'),published)
+        self.assertIn(('storage_clips','unknown'),published)
 
 def live():
     cfg=json.loads((Path(__file__).parent/'local-config.json').read_text())

@@ -1,15 +1,17 @@
 diff --git a/main/application.cc b/main/application.cc
-index 31de205..cd3ba8b 100644
+index 31de205..f3865b1 100644
 --- a/main/application.cc
 +++ b/main/application.cc
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,8 @@
 +#include <hal/board/dania_controls.h>
++#include <hal/board/cloud_local_voice.h>
++#include <hal/board/sd_voice.h>
  #include "application.h"
 +#include <hal/hal.h>
  #include "assets.h"
  #include "assets/lang_config.h"
  #include "audio_codec.h"
-@@ -354,7 +356,7 @@ void Application::HandleActivationDoneEvent() {
+@@ -354,7 +358,7 @@ void Application::HandleActivationDoneEvent() {
      auto& board = Board::GetInstance();
      board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
  
@@ -18,7 +20,7 @@ index 31de205..cd3ba8b 100644
          Schedule([this]() {
              // Play the success sound to indicate the device is ready
              audio_service_.PlaySound(Lang::Sounds::OGG_SUCCESS);
-@@ -366,11 +368,11 @@ void Application::ActivationTask() {
+@@ -366,11 +370,11 @@ void Application::ActivationTask() {
      // Create OTA object for activation process
      ota_ = std::make_unique<Ota>();
  
@@ -35,7 +37,7 @@ index 31de205..cd3ba8b 100644
  
      // Initialize the protocol
      InitializeProtocol();
-@@ -442,6 +444,7 @@ void Application::CheckAssetsVersion() {
+@@ -442,6 +446,7 @@ void Application::CheckAssetsVersion() {
  void Application::CheckNewVersion() {
      const int MAX_RETRY = 10;
      int retry_count = 0;
@@ -43,7 +45,7 @@ index 31de205..cd3ba8b 100644
      int retry_delay = 10;  // Initial retry delay in seconds
  
      auto& board = Board::GetInstance();
-@@ -499,15 +502,18 @@ void Application::CheckNewVersion() {
+@@ -499,15 +504,18 @@ void Application::CheckNewVersion() {
  
          // No new version, mark the current version as valid
          ota_->MarkCurrentVersionValid();
@@ -66,7 +68,7 @@ index 31de205..cd3ba8b 100644
          }
  
          // This will block the loop until the activation is done or timeout
-@@ -535,7 +541,10 @@ void Application::InitializeProtocol() {
+@@ -535,7 +543,10 @@ void Application::InitializeProtocol() {
  
      display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
  
@@ -78,7 +80,70 @@ index 31de205..cd3ba8b 100644
          protocol_ = std::make_unique<MqttProtocol>();
      } else if (ota_->HasWebsocketConfig()) {
          protocol_ = std::make_unique<WebsocketProtocol>();
-@@ -628,6 +637,7 @@ void Application::InitializeProtocol() {
+@@ -558,6 +569,7 @@ void Application::InitializeProtocol() {
+     });
+ 
+     protocol_->OnAudioChannelOpened([this, codec, &board]() {
++        Schedule([](){ dania::local_audio_connection(true); });
+         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
+             ESP_LOGW(TAG,
+@@ -570,6 +582,8 @@ void Application::InitializeProtocol() {
+     protocol_->OnAudioChannelClosed([this, &board]() {
+         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+         Schedule([this]() {
++            dania::local_audio_connection(false);
++            dania::cancel_sd_voice();
+             auto display = Board::GetInstance().GetDisplay();
+             display->SetChatMessage("system", "");
+             SetDeviceState(kDeviceStateIdle);
+@@ -583,7 +597,37 @@ void Application::InitializeProtocol() {
+             ESP_LOGW(TAG, "Incoming JSON message has no type");
+             return;
+         }
+-        if (strcmp(type->valuestring, "notify") == 0) {
++        if (strcmp(type->valuestring, "local_audio") == 0) {
++            auto request = cJSON_GetObjectItem(root, "request_id");
++            auto pack = cJSON_GetObjectItem(root, "pack_id");
++            auto clip = cJSON_GetObjectItem(root, "clip_id");
++            auto timeout = cJSON_GetObjectItem(root, "timeout_ms");
++            if (!cJSON_IsString(request) || !cJSON_IsString(pack) ||
++                !cJSON_IsString(clip) || !cJSON_IsNumber(timeout) ||
++                timeout->valuedouble != timeout->valueint) return;
++            Schedule([this, id=std::string(request->valuestring),
++                      pack=std::string(pack->valuestring), clip=std::string(clip->valuestring),
++                      timeout=timeout->valueint, session=protocol_->session_id()]() {
++                // SetDeviceState posts a separate STATE_CHANGED event. A
++                // second schedule turn lets Speaking finish ResetDecoder and
++                // StartNetworkPlayback before the SD job captures its epoch.
++                const auto epoch=dania::local_audio_generation();
++                Schedule([this,id,pack,clip,timeout,session,epoch]() {
++                    if(epoch!=dania::local_audio_generation() || !protocol_ ||
++                       protocol_->session_id()!=session || !protocol_->IsAudioChannelOpened()) return;
++                    dania::request_cloud_local_voice(id,pack,clip,timeout,
++                        [this,session](const std::string& request,const char* state) {
++                            if(protocol_ && protocol_->session_id()==session && protocol_->IsAudioChannelOpened())
++                                protocol_->SendLocalAudioStatus(request,state);
++                        });
++                });
++            });
++        } else if (strcmp(type->valuestring, "local_audio_cancel") == 0) {
++            auto request=cJSON_GetObjectItem(root,"request_id");
++            if(cJSON_IsString(request)) Schedule([id=std::string(request->valuestring)](){
++                dania::cancel_cloud_local_voice(id);
++            });
++        } else if (strcmp(type->valuestring, "notify") == 0) {
+             auto audio_url = cJSON_GetObjectItem(root, "audio_url");
+             if (!cJSON_IsString(audio_url) || audio_url->valuestring[0] == '\0') {
+                 ESP_LOGW(TAG, "Notify message requires audio_url");
+@@ -623,11 +667,14 @@ void Application::InitializeProtocol() {
+             }
+             if (strcmp(state->valuestring, "start") == 0) {
+                 Schedule([this]() {
++                    dania::cancel_cloud_local_voice();
++                    dania::cancel_sd_voice();
+                     aborted_ = false;
+                     SetDeviceState(kDeviceStateSpeaking);
                  });
              } else if (strcmp(state->valuestring, "stop") == 0) {
                  Schedule([this]() {
@@ -86,7 +151,7 @@ index 31de205..cd3ba8b 100644
                      if (GetDeviceState() == kDeviceStateSpeaking) {
                          if (listening_mode_ == kListeningModeManualStop) {
                              SetDeviceState(kDeviceStateIdle);
-@@ -674,6 +684,15 @@ void Application::InitializeProtocol() {
+@@ -674,6 +721,15 @@ void Application::InitializeProtocol() {
                      display->SetEmotion(emotion_str.c_str());
                  });
              }
@@ -102,7 +167,7 @@ index 31de205..cd3ba8b 100644
          } else if (strcmp(type->valuestring, "mcp") == 0) {
              auto payload = cJSON_GetObjectItem(root, "payload");
              if (cJSON_IsObject(payload)) {
-@@ -725,30 +744,6 @@ void Application::InitializeProtocol() {
+@@ -725,30 +781,6 @@ void Application::InitializeProtocol() {
      protocol_->Start();
  }
  
@@ -133,7 +198,7 @@ index 31de205..cd3ba8b 100644
  void Application::Alert(const char* status, const char* message, const char* emotion,
                          const std::string_view& sound) {
      ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
-@@ -833,6 +828,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
+@@ -833,6 +865,7 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
          if (!protocol_->OpenAudioChannel()) {
              // Return to idle so the device is not stuck in the connecting
              // state (not every failure path reports a network error)
@@ -141,7 +206,7 @@ index 31de205..cd3ba8b 100644
              SetDeviceState(kDeviceStateIdle);
              return;
          }
-@@ -970,6 +966,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
+@@ -970,6 +1003,7 @@ void Application::ContinueWakeWordInvoke(const std::string& wake_word) {
              // Return to idle so the device is not stuck in the connecting
              // state (not every failure path reports a network error), and
              // wake word detection is re-enabled by the idle state handler.
@@ -149,7 +214,7 @@ index 31de205..cd3ba8b 100644
              SetDeviceState(kDeviceStateIdle);
              return;
          }
-@@ -1052,6 +1049,7 @@ void Application::HandleStateChangedEvent() {
+@@ -1052,6 +1086,7 @@ void Application::HandleStateChangedEvent() {
                  audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
              }
              audio_service_.ResetDecoder();
@@ -157,6 +222,15 @@ index 31de205..cd3ba8b 100644
              break;
          case kDeviceStateNotifying:
              display->SetStatus(Lang::Strings::SPEAKING);
+@@ -1174,6 +1209,8 @@ void Application::Schedule(std::function<void()>&& callback) {
+ 
+ void Application::AbortSpeaking(AbortReason reason) {
+     ESP_LOGI(TAG, "Abort speaking");
++    dania::cancel_cloud_local_voice();
++    dania::cancel_sd_voice();
+     aborted_ = true;
+     if (protocol_) {
+         protocol_->SendAbortSpeaking(reason);
 diff --git a/main/application.h b/main/application.h
 index f2b9a00..68f01d1 100644
 --- a/main/application.h
@@ -1013,3 +1087,57 @@ index eda3fd7..ce17ee5 100644
      bool has_serial_number_ = false;
      bool has_activation_challenge_ = false;
      std::string current_version_;
+diff --git a/main/protocols/protocol.cc b/main/protocols/protocol.cc
+index ac591b5..e1a7e24 100644
+--- a/main/protocols/protocol.cc
++++ b/main/protocols/protocol.cc
+@@ -5,6 +5,18 @@
+ 
+ #define TAG "Protocol"
+ 
++bool Protocol::SendLocalAudioStatus(const std::string& request,const char* state) {
++    cJSON* root=cJSON_CreateObject();
++    cJSON_AddStringToObject(root,"type","local_audio");
++    cJSON_AddStringToObject(root,"request_id",request.c_str());
++    cJSON_AddStringToObject(root,"state",state);
++    char* raw=cJSON_PrintUnformatted(root);
++    bool ok=raw && SendText(raw);
++    if(raw) cJSON_free(raw);
++    cJSON_Delete(root);
++    return ok;
++}
++
+ void Protocol::AddTextFontCapabilities(cJSON* root) {
+     auto capability = Assets::GetInstance().text_font_capability();
+     cJSON* features = cJSON_GetObjectItem(root, "features");
+diff --git a/main/protocols/protocol.h b/main/protocols/protocol.h
+index cfa0dd2..5501e00 100644
+--- a/main/protocols/protocol.h
++++ b/main/protocols/protocol.h
+@@ -66,6 +66,7 @@ public:
+     virtual void SendStopListening();
+     virtual void SendAbortSpeaking(AbortReason reason);
+     virtual void SendMcpMessage(const std::string& message);
++    bool SendLocalAudioStatus(const std::string& request, const char* state);
+ 
+ protected:
+     std::function<void(const cJSON* root)> on_incoming_json_;
+diff --git a/main/protocols/websocket_protocol.cc b/main/protocols/websocket_protocol.cc
+index e0e3df9..5757f30 100644
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -1,4 +1,5 @@
+ #include "websocket_protocol.h"
++#include <hal/board/cloud_local_voice.h>
+ #include "application.h"
+ #include "board.h"
+ #include "settings.h"
+@@ -208,6 +209,8 @@ std::string WebsocketProtocol::GetHelloMessage() {
+     cJSON_AddBoolToObject(features, "mcp", true);
+     cJSON_AddItemToObject(root, "features", features);
+     AddTextFontCapabilities(root);
++    if(auto* capability=dania::local_audio_capabilities())
++        cJSON_AddItemToObject(root,"local_audio",capability);
+     cJSON_AddStringToObject(root, "transport", "websocket");
+     cJSON* audio_params = cJSON_CreateObject();
+     cJSON_AddStringToObject(audio_params, "format", "opus");

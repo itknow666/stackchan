@@ -37,6 +37,7 @@ class Client:
         # No token, endpoint, paths, query, or action arguments in status files.
         state = {"version": 1, "pc_id": self.config.pc_id, "connected": self.connected,
                  "dry_run": self.config.dry_run, "pending": self.dispatcher.pending,
+                 "capabilities": self.config.hello()["capabilities"],
                  "updated_at_ms": int(time.time() * 1000), "last_result": self.last_result}
         path = self.config.state_file
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -49,6 +49,10 @@ add_executable(sd_voice_file_test sd_voice_file_test.cpp
 target_include_directories(sd_voice_file_test PRIVATE ${ARDUINOJSON_INCLUDE_DIR})
 target_compile_features(sd_voice_file_test PRIVATE cxx_std_17)
 add_test(NAME sd_voice_file_test COMMAND $<TARGET_FILE:sd_voice_file_test>)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME cloud_local_voice_lifecycle_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check_cloud_local_voice.py
+    --compiler ${CMAKE_CXX_COMPILER})
 
 set(STACKCHAN_AUDIO_SERVICE_SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/../xiaozhi-esp32/main/audio/audio_service.cc"

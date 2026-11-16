@@ -19,6 +19,7 @@ using LocalVoiceCallback = std::function<void(LocalVoiceEvent, const char*)>;
 void initialize_sd_voice(bool power_ready);
 VoiceStorageInfo voice_storage_info();
 std::vector<std::string> sd_headpet_ids();
+std::vector<std::string> sd_voice_ids();
 bool has_sd_voice(std::string_view id);
 // At most one pending/active request. A true return means queued, not audible.
 // Accepted follows full CRC/Ogg validation and an exclusive audio reservation;

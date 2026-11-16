@@ -39,6 +39,7 @@ VoiceManifest manifest;
 sdmmc_card_t* card = nullptr;
 TaskHandle_t worker = nullptr;
 std::atomic<bool> busy{false};
+std::atomic<bool> worker_ready{false};
 std::atomic<uint32_t> request_generation{1};
 struct Job { VoiceClip clip; LocalVoiceCallback callback; uint32_t generation, audio_generation; int64_t deadline; };
 std::unique_ptr<Job> next_job;
@@ -209,6 +210,9 @@ void worker_main(void*) {
         info.free_bytes=free;
         ESP_LOGI(Tag,"SD capacity total_MB=%llu free_MB=%llu",total/(1024*1024),free/(1024*1024));
     }
+    // On a large card this initial scan can take seconds. Until it finishes,
+    // reject before queueing rather than consume a clip's playback deadline.
+    worker_ready.store(true);
     for(;;) {
         ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
         std::unique_ptr<Job> job;
@@ -233,7 +237,7 @@ void initialize_sd_voice(bool power_ready) {
     mount.max_files=4;
     mount.allocation_unit_size=16*1024;
     const auto result=esp_vfs_fat_sdspi_mount(Mount,&host,&device,&mount,&card);
-    if(result!=ESP_OK) {info.error="mount_failed";ESP_LOGW(Tag,"SD unavailable (%s); embedded/network audio retained",esp_err_to_name(result));return;}
+    if(result!=ESP_OK) {info.error="mount_failed";ESP_LOGW(Tag,"SD unavailable (0x%x %s); embedded/network audio retained",static_cast<unsigned>(result),esp_err_to_name(result));return;}
     info.mounted=true;
     bootstrap();
     load_manifest();
@@ -245,13 +249,19 @@ void initialize_sd_voice(bool power_ready) {
 }
 VoiceStorageInfo voice_storage_info() {std::lock_guard<std::mutex> lock(state_mutex);return info;}
 std::vector<std::string> sd_headpet_ids() {std::lock_guard<std::mutex> lock(state_mutex);return info.valid?manifest.headpet:std::vector<std::string>{};}
+std::vector<std::string> sd_voice_ids() {
+    std::lock_guard<std::mutex> lock(state_mutex);
+    std::vector<std::string> ids;
+    if(info.valid) for(const auto& clip:manifest.clips) ids.push_back(clip.id);
+    return ids;
+}
 bool has_sd_voice(std::string_view id) {
     std::lock_guard<std::mutex> lock(state_mutex);
     return info.valid && std::any_of(manifest.clips.begin(),manifest.clips.end(),[&](const auto& clip){return clip.id==id;});
 }
 bool request_sd_voice(std::string_view id,LocalVoiceCallback callback) {
     std::lock_guard<std::mutex> lock(state_mutex);
-    if(!info.valid || !worker || busy.load()) return false;
+    if(!info.valid || !worker || !worker_ready.load() || busy.load()) return false;
     auto found=std::find_if(manifest.clips.begin(),manifest.clips.end(),[&](const auto& c){return c.id==id;});
     if(found==manifest.clips.end()) return false;
     busy.store(true);

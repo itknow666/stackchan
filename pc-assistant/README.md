@@ -23,7 +23,7 @@ Copy-Item examples/pc-assistant.example.json pc-assistant/local-config.json
 - `actions`：明确开放的操作名。可以删除任意不需要的操作；关闭的操作不会被执行。
 - `apps`：本机允许打开的软件，使用 `id`、`name`、`executable`、可选的固定 `args`。可执行文件必须为绝对路径的 `.exe`，不要配置命令解释器、脚本运行器或管理员工具。
 - `projects`：本机允许打开的文件夹，使用 `id`、`name`、`path`，路径必须为绝对路径。此版用文件管理器打开；要使用编辑器，可另配置固定参数的软件快捷项。
-- `state_file`：默认 `private/status.json`，相对于配置文件所在目录。保存在线状态、待处理数量、模拟状态和最后成功与否，不记录密钥、搜索词、软件路径和操作参数。
+- `state_file`：默认 `private/status.json`，相对于配置文件所在目录。保存在线状态、待处理数量、模拟状态、最后成功与否及 `capabilities` 中的软件与项目 ID/名称和允许动作，不记录密钥、搜索词、软件路径和操作参数。控制台仅读取此安全状态，十五秒未更新则显示离线。
 
 例如将下面内容分别填入 `apps` 和 `projects` 数组，路径替换为本机实际路径：
 

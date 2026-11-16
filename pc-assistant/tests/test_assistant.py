@@ -349,6 +349,9 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
             state = json.loads(config.state_file.read_text())
             self.assertFalse(state["connected"])
             self.assertNotIn(config.token, config.state_file.read_text())
+            self.assertEqual(state['capabilities'],config.hello()['capabilities'])
+            self.assertNotIn('executable',config.state_file.read_text())
+            self.assertNotIn('C:/Robot',config.state_file.read_text())
             self.assertEqual(state["pending"], 0)
 
     async def test_invalid_ready_rejected_before_execution(self):
