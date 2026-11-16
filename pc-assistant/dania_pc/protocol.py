@@ -51,21 +51,36 @@ class Dispatcher:
         self.pending = 0
         self.worker = None
         self.send = None
+        self.active = False
+        self.generation = 0
 
     async def start(self, send):
+        if self.worker is not None:
+            raise RuntimeError("Previous connection must be stopped before restarting")
+        self.generation += 1
+        self.active = True
         self.send = send
         self.worker = asyncio.create_task(self._work())
 
-    async def stop(self):
-        if self.worker:
-            self.worker.cancel()
-            await asyncio.gather(self.worker, return_exceptions=True)
-            self.worker = None
+    def invalidate(self):
+        """Revoke execution synchronously when the transport closes, before yielding.
+
+        The session cleanup coroutine may not run until the worker gets another turn.
+        Draining and revoking here makes that scheduling order harmless.
+        """
+        self.active = False
         while not self.queue.empty():
             call = self.queue.get_nowait()
             self._remember(call["id"], result(call["id"], False, "Disconnected before execution"))
             self.pending -= 1
             self.queue.task_done()
+
+    async def stop(self):
+        self.invalidate()
+        if self.worker:
+            self.worker.cancel()
+            await asyncio.gather(self.worker, return_exceptions=True)
+            self.worker = None
         self.send = None
 
     def _remember(self, call_id, response, signature=None):
@@ -74,7 +89,7 @@ class Dispatcher:
         self.ids[call_id] = (self.monotonic(), response, signature)
 
     async def accept(self, call):
-        if not self.worker or self.worker.done():
+        if not self.active or not self.worker or self.worker.done():
             raise RuntimeError("Dispatcher is disconnected")
         call_id = call.get("id")
         if not isinstance(call_id, str) or not 1 <= len(call_id) <= 128:
@@ -114,6 +129,7 @@ class Dispatcher:
         self.pending += 1
         call = dict(call)
         call["_expires_at"] = self.monotonic() + (call["deadline_ms"] - self.wall_ms()) / 1000
+        call["_generation"] = self.generation
         self.queue.put_nowait(call)
 
     async def _work(self):
@@ -121,10 +137,14 @@ class Dispatcher:
             call = await self.queue.get()
             try:
                 # Recheck after queue wait, immediately before the native executor.
-                if call["deadline_ms"] <= self.wall_ms() or self.monotonic() >= call["_expires_at"]:
+                if not self.active or call["_generation"] != self.generation:
+                    response = result(call["id"], False, "Disconnected before execution")
+                elif call["deadline_ms"] <= self.wall_ms() or self.monotonic() >= call["_expires_at"]:
                     response = result(call["id"], False, "Call expired before execution")
                 else:
                     def before_effect():
+                        if not self.active or call["_generation"] != self.generation:
+                            raise ConnectionError("Disconnected before execution")
                         if (call["deadline_ms"] <= self.wall_ms() or
                                 self.monotonic() >= call["_expires_at"]):
                             raise TimeoutError("Call expired before execution")
@@ -132,6 +152,8 @@ class Dispatcher:
                     response = result(call["id"], True, message, data)
             except TimeoutError:
                 response = result(call["id"], False, "Call expired before execution")
+            except ConnectionError:
+                response = result(call["id"], False, "Disconnected before execution")
             except asyncio.CancelledError:
                 self._remember(call["id"], result(call["id"], False, "Disconnected during execution; not retried"))
                 raise
@@ -142,4 +164,5 @@ class Dispatcher:
                 self.pending -= 1
                 self.queue.task_done()
             self._remember(call["id"], response)
-            await self.send(response)
+            if self.active:
+                await self.send(response)

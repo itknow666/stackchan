@@ -191,6 +191,25 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.dispatcher.pending, 0)
         self.assertTrue(all(not response["ok"] for response in self.responses))
 
+    async def test_synchronous_invalidation_revokes_running_executor_gate(self):
+        self.executor.gate = asyncio.Event()
+        await self.dispatcher.accept(call("running"))
+        await self.executor.entered.wait()
+        await self.dispatcher.accept(call("queued"))
+        self.dispatcher.invalidate()
+        self.assertEqual(self.dispatcher.pending, 1)
+        self.executor.gate.set()
+        await self.settle()
+        self.assertEqual(self.executor.calls, [])
+        self.assertEqual(self.dispatcher.pending, 0)
+        self.assertEqual(self.responses, [])
+        await self.dispatcher.stop()
+        await self.dispatcher.start(self.send)
+        await self.dispatcher.accept(call("running"))
+        await self.dispatcher.accept(call("queued"))
+        self.assertEqual(len(self.responses), 2)
+        self.assertTrue(all(not response["ok"] for response in self.responses))
+
     async def test_dedupe_capacity_does_not_evict_live_ids(self):
         for index in range(MAX_IDS):
             self.dispatcher._remember(str(index), {"ok": False})
@@ -209,6 +228,52 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LoopbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_buffered_calls_are_dropped_at_normal_and_exceptional_receive_close(self):
+        class Socket:
+            def __init__(self, calls, exceptional=False):
+                self.calls = iter(calls)
+                self.exceptional = exceptional
+                self.closed = False
+                self.responses = []
+            async def send(self, frame):
+                value = json.loads(frame)
+                if value["type"] == "result":
+                    self.responses.append(value)
+            async def recv(self):
+                return '{"type":"ready","version":1}'
+            def __aiter__(self):
+                return self
+            async def __anext__(self):
+                try:
+                    return json.dumps(next(self.calls))
+                except StopIteration:
+                    self.closed = True
+                    if self.exceptional:
+                        raise ConnectionError("Transport closed abnormally")
+                    raise StopAsyncIteration
+        for exceptional in (False, True):
+            with self.subTest(exceptional=exceptional), tempfile.TemporaryDirectory() as directory:
+                executor = FakeExecutor()
+                client = Client(configuration(Path(directory) / "status.json"), executor)
+                calls = [call(str(i), deadline_ms=int(time.time() * 1000) + 5000) for i in range(4)]
+                socket = Socket(calls, exceptional)
+                if exceptional:
+                    with self.assertRaises(ConnectionError):
+                        await client.session(socket)
+                else:
+                    await client.session(socket)
+                self.assertTrue(socket.closed)
+                self.assertEqual(executor.calls, [])
+                self.assertEqual(client.dispatcher.pending, 0)
+                self.assertEqual(len(client.dispatcher.ids), 4)
+                # The same calls on a new live session return cached failures only.
+                reconnected = Socket(calls)
+                await client.session(reconnected)
+                self.assertEqual(executor.calls, [])
+                self.assertEqual(len(reconnected.responses), 4)
+                self.assertTrue(all(not response["ok"] for response in reconnected.responses))
+                self.assertFalse(json.loads(client.config.state_file.read_text())["connected"])
+
     async def test_outgoing_client_auth_limits_cancellation_and_private_status(self):
         class Connection:
             async def __aenter__(self):

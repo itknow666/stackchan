@@ -53,13 +53,24 @@ class Client:
         self.write_state()
 
         async def send(response):
-            await ws.send(json.dumps(response, ensure_ascii=False))
+            try:
+                await ws.send(json.dumps(response, ensure_ascii=False))
+            except BaseException:
+                self.dispatcher.invalidate()
+                self.connected = False
+                raise
             self.last_result = {"ok": response["ok"], "at_ms": int(time.time() * 1000)}
             self.write_state()
 
         async def receive():
-            async for frame in ws:
-                await self.dispatcher.accept(decode_frame(frame))
+            try:
+                async for frame in ws:
+                    await self.dispatcher.accept(decode_frame(frame))
+            finally:
+                # This must happen without an await: the worker may be next in the
+                # ready queue before session() observes that the reader has ended.
+                self.dispatcher.invalidate()
+                self.connected = False
 
         async def state_loop():
             while True:
@@ -76,6 +87,8 @@ class Client:
             for task in done:
                 task.result()
         finally:
+            self.dispatcher.invalidate()
+            self.connected = False
             for task in (reader, state_task):
                 if task:
                     task.cancel()
