@@ -21,6 +21,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r home-assistant/requirements.txt
       - run: python home-assistant/test-bridge.py
+      - run: python home-assistant/test-codex-notifications.py
       - run: python home-assistant/build-dashboard.py
       - run: python -m pip install -r pc-assistant/requirements.txt
       - run: python -m unittest discover -s tests

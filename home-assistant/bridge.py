@@ -12,7 +12,8 @@ PREVIEW_CLEANUP_TIMEOUT_SECONDS=2
 UUID = 'e2e5e5e{}-1234-5678-1234-56789abcdef0'
 SAFE_ID=re.compile(r'[A-Za-z0-9_-]{1,64}\Z')
 PC_ACTIONS={'open_app':'打开指定软件','open_project':'打开项目文件夹','set_volume':'电脑音量',
-            'media':'媒体控制','search_web':'网页搜索','lock':'锁定电脑'}
+            'media':'媒体控制','search_web':'网页搜索','lock':'锁定电脑','codex_start':'交给 Codex 工作',
+            'codex_status':'查询 Codex 任务','codex_cancel':'取消 Codex 任务'}
 
 def pc_status(path,now=None):
     """Read only a bounded, credential-free projection of the companion state."""
@@ -28,7 +29,7 @@ def pc_status(path,now=None):
         caps=raw.get('capabilities',{})
         if not isinstance(caps,dict): return offline
         actions=caps.get('actions',[])
-        if not isinstance(actions,list) or len(actions)>6 or any(a not in PC_ACTIONS for a in actions): return offline
+        if not isinstance(actions,list) or len(actions)>len(PC_ACTIONS) or any(a not in PC_ACTIONS for a in actions): return offline
         def names(group):
             entries=caps.get(group,[])
             if not isinstance(entries,list) or len(entries)>64: raise ValueError('Invalid capability list')
@@ -95,6 +96,15 @@ class Bridge:
         self.pack=json.loads(manifest.read_text(encoding='utf-8')) if manifest.exists() else {'rules':[]}
         self.rules={Path(r['file']).stem:r for r in self.pack['rules']}
         self.client=None
+        self.codex_notifier=None
+        notifications=self.cfg.get('codex_notifications')
+        if notifications and notifications.get('enabled',False):
+            from codex_notifications import CompletionNotifier
+            self.codex_notifier=CompletionNotifier(notifications)
+            state_path=self.cfg.get('pc_assistant',{}).get('status_file')
+            forbidden={(BASE/'local-config.json').resolve()}
+            if isinstance(state_path,str): forbidden.add((BASE/Path(state_path)).resolve())
+            if self.codex_notifier.path.resolve() in forbidden: raise ValueError('通知去重文件须独立保存')
         self.connect_lock=asyncio.Lock()
         self.config_lock=asyncio.Lock()
         self.config_request=time.time_ns()%2147483646
@@ -274,6 +284,25 @@ class Bridge:
             for target,source in [('storage_clips','clips'),('storage_free','free_mb'),('storage_total','total_mb')]: self.publish(target,reply[source])
             return reply
 
+    async def play_completion(self,clip):
+        # The firmware accepts local playback only while Agent is idle. A
+        # definitive preplay rejection can be tried later; any other outcome
+        # is final for this task, including accepted playback with lost ACK.
+        if self.robot_preview_task and not self.robot_preview_task.done(): return 'unavailable'
+        async with asyncio.timeout(24), self.config_lock:
+            if not (self.client and self.client.is_connected): return 'unavailable'
+            request=self.next_request()
+            await self.write('3',{'cmd':'playLocalClip','id':clip,'request_id':request})
+            accepted=False
+            while True:
+                try: reply=await self.config_reply(request,'local_clip',.3)
+                except TimeoutError: continue
+                state=reply.get('state')
+                if state in ('completed','unavailable','failed','cancelled'): return 'unknown' if accepted and state=='unavailable' else state
+                if state=='accepted': accepted=True
+                if state not in ('pending','accepted'): return 'unknown'
+                await asyncio.sleep(.1)
+
     async def robot_preview(self,key):
         request=None
         terminal=False
@@ -451,6 +480,9 @@ class Bridge:
             if isinstance(path,str) and path:
                 try: status=await asyncio.to_thread(pc_status,(BASE/Path(path)).resolve())
                 except (ValueError,OSError): pass
+            if self.codex_notifier and isinstance(path,str) and path:
+                await self.codex_notifier.poll((BASE/Path(path)).resolve(),
+                    bool(self.client and self.client.is_connected),self.play_completion)
             self.publish('pc_online','ON' if status['online'] else 'OFF')
             self.publish('pc_ready','ON' if status['ready'] else 'OFF')
             for key in ('mode','actions','apps','projects'): self.publish('pc_'+key,status[key])

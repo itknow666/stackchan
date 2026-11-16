@@ -112,3 +112,30 @@ func TestPCSearchRejectsNonPrintableBeforeRelay(t *testing.T) {
 		}
 	}
 }
+
+func TestPCCodexActionsAreBoundedAndProjectAllowlisted(t *testing.T) {
+	caps := pcTestCaps()
+	caps.Actions = append(caps.Actions, "codex_start", "codex_status", "codex_cancel")
+	for _, test := range []struct {
+		action, args string
+		valid        bool
+	}{
+		{"codex_start", `{"project":"robot","task":"检查项目"}`, true},
+		{"codex_start", `{"project":"unknown","task":"检查项目"}`, false},
+		{"codex_start", `{"project":"robot","task":""}`, false},
+		{"codex_start", `{"project":"robot","task":"` + strings.Repeat("中", 4001) + `"}`, false},
+		{"codex_start", `{"project":"robot","task":"task","shell":"anything"}`, false},
+		{"codex_status", `{"task_id":"latest"}`, true},
+		{"codex_status", `{"task_id":"0123456789abcdef0123456789abcdef"}`, true},
+		{"codex_cancel", `{"task_id":"--last"}`, false},
+		{"codex_cancel", `{"task_id":"latest","force":true}`, false},
+	} {
+		var args map[string]any
+		if err := json.Unmarshal([]byte(test.args), &args); err != nil {
+			t.Fatal(err)
+		}
+		if err := validatePCAction(caps, test.action, args); (err == nil) != test.valid {
+			t.Errorf("%s: err=%v", test.action, err)
+		}
+	}
+}

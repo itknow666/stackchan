@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-ACTIONS = frozenset({"open_app", "open_project", "set_volume", "media", "search_web", "lock"})
+ACTIONS = frozenset({"open_app", "open_project", "set_volume", "media", "search_web", "lock", "codex_start", "codex_status", "codex_cancel"})
 ID = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
 
@@ -20,19 +20,20 @@ class Config:
     projects: dict
     dry_run: bool
     state_file: Path
+    codex: dict | None = None
 
     def hello(self):
         return {"type": "hello", "version": 1, "pc_id": self.pc_id,
                 "capabilities": {"apps": [{"id": k, "name": v["name"]} for k, v in self.apps.items()]
                                  if "open_app" in self.actions else [],
                                  "projects": [{"id": k, "name": v["name"]} for k, v in self.projects.items()]
-                                 if "open_project" in self.actions else [],
+                                 if self.actions & {"open_project", "codex_start"} else [],
                                  "actions": sorted(self.actions)}}
 
 
 def load_config(path: Path) -> Config:
     raw = json.loads(path.read_text(encoding="utf-8"))
-    allowed = {"endpoint", "token", "pc_id", "actions", "apps", "projects", "dry_run", "state_file"}
+    allowed = {"endpoint", "token", "pc_id", "actions", "apps", "projects", "dry_run", "state_file", "codex"}
     if not isinstance(raw, dict) or raw.keys() - allowed:
         raise ValueError("Unknown configuration fields")
     endpoint, token = raw.get("endpoint", ""), raw.get("token", "")
@@ -90,8 +91,41 @@ def load_config(path: Path) -> Config:
         state_file = path.resolve().parent / state_file
     if state_file.resolve() == path.resolve():
         raise ValueError("State file must differ from the configuration file")
+    codex = raw.get("codex")
+    if codex is not None:
+        if not isinstance(codex, dict) or codex.keys() - {"executable", "tasks_file", "sandbox", "timeout_seconds", "home", "windows_sandbox"}:
+            raise ValueError("Invalid Codex configuration")
+        executable = codex.get("executable")
+        if not isinstance(executable, str) or not Path(executable).is_absolute() or Path(executable).suffix.lower() != ".exe":
+            raise ValueError("Configure an absolute Codex executable")
+        sandbox = codex.get("sandbox", "read-only")
+        timeout = codex.get("timeout_seconds", 1800)
+        if sandbox not in {"read-only", "workspace-write"} or type(timeout) is not int or not 10 <= timeout <= 7200:
+            raise ValueError("Invalid Codex sandbox or timeout")
+        tasks = codex.get("tasks_file", "private/codex-tasks.json")
+        if not isinstance(tasks, str) or not tasks:
+            raise ValueError("Invalid Codex tasks file")
+        tasks = Path(tasks)
+        if not tasks.is_absolute(): tasks = path.resolve().parent / tasks
+        schema_path = tasks.with_name(tasks.name + ".result-schema.json")
+        if tasks.resolve() in {path.resolve(), state_file.resolve()} or schema_path.resolve() in {path.resolve(), state_file.resolve()}:
+            raise ValueError("Codex task storage must be separate")
+        home = codex.get("home")
+        if home is not None:
+            if not isinstance(home, str) or not Path(home).is_absolute() or not Path(home).is_dir():
+                raise ValueError("Codex home must be an existing absolute directory")
+            home = Path(home).resolve()
+            for item in groups["projects"].values():
+                if home == Path(item["path"]).resolve() or Path(item["path"]).resolve() in home.parents:
+                    raise ValueError("Keep Codex authentication outside allowed projects")
+        windows_sandbox = codex.get("windows_sandbox")
+        if windows_sandbox is not None and (not isinstance(windows_sandbox, str) or windows_sandbox not in {"mxc", "elevated", "unelevated"}):
+            raise ValueError("Invalid Windows sandbox backend")
+        codex = {"executable": executable, "sandbox": sandbox, "timeout_seconds": timeout, "tasks_file": tasks.resolve(), "home": home, "windows_sandbox": windows_sandbox}
+    if set(actions) & {"codex_start", "codex_status", "codex_cancel"} and (codex is None or not groups["projects"]):
+        raise ValueError("Codex actions require configuration and allowed projects")
     config = Config(endpoint, token, pc_id, frozenset(actions), groups["apps"], groups["projects"],
-                    dry_run, state_file)
+                    dry_run, state_file, codex)
     if len(json.dumps(config.hello()).encode("utf-8")) > 16 * 1024:
         raise ValueError("Advertised capabilities exceed the protocol frame limit")
     return config

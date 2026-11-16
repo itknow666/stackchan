@@ -118,3 +118,8 @@ Set-Location pc-assistant
 ```
 
 覆盖严格参数、认证选项、文本帧限制、队列上限、排队过期、执行前过期、系统时钟回退、重复标识、断线取消、握手、真实本机 WebSocket 往返和启动项生成。桌面操作需在用户清醒且确认配置后另行验收，模拟测试通过不代表实际电脑动作已验证。
+
+
+## Codex 后台任务
+
+可选的 `codex_start`、`codex_status`、`codex_cancel` 用于明确的语音编程请求，提交后快速返回，后台独立执行。配置和完成通知见 [Codex 语音任务](../docs/codex-voice-tasks.md) 及 [配置示例](../examples/pc-assistant.codex.example.json)。普通电脑动作仍使用原来的十五秒截止时间。Codex 长任务使用独立执行时限，云端断线不重新派发，助手重启不自动重试。

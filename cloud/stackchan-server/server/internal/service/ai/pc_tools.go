@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -60,7 +61,7 @@ func (p *pcControl) tools() []map[string]any {
 	}
 	c := peer.caps
 	tools := []map[string]any{}
-	for _, action := range []string{"open_app", "open_project", "set_volume", "media", "search_web", "lock"} {
+	for _, action := range []string{"open_app", "open_project", "set_volume", "media", "search_web", "lock", "codex_start", "codex_status", "codex_cancel"} {
 		if !hasPCAction(c, action) {
 			continue
 		}
@@ -94,6 +95,22 @@ func (p *pcControl) tools() []map[string]any {
 			props["query"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 300}
 			required = []string{"query"}
 			description = "Open a web search in the computer browser; this tool does not return search results."
+		case "codex_start":
+			if len(c.Projects) == 0 {
+				continue
+			}
+			props = pcEnum("project", pcItemIDs(c.Projects))
+			props["task"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 4000}
+			required = []string{"project", "task"}
+			listing, _ := json.Marshal(c.Projects)
+			description = "Start a background Codex coding task ONLY when the user explicitly asks to give work to Codex. Allowed projects: " + string(listing) + ". Acceptance is not completion. Save the returned task_id; query status rather than submitting again. This is a dedicated worker session, not the existing desktop chat. No automatic push or deployment."
+		case "codex_status", "codex_cancel":
+			props["task_id"] = map[string]any{"type": "string", "minLength": 1, "maxLength": 32}
+			required = []string{"task_id"}
+			description = "Query a background Codex task; use returned task_id or latest for the latest task."
+			if action == "codex_cancel" {
+				description = "Request cancellation of a Codex task; use task_id or latest. Cancellation does not undo existing file edits. Query status to confirm it stopped."
+			}
 		case "lock":
 			description = "Ask Windows to lock the computer."
 		}
@@ -109,6 +126,34 @@ func validatePCAction(c pcCapabilities, action string, args map[string]any) erro
 	}
 	if args == nil {
 		return errors.New("computer arguments must be an object")
+	}
+	if action == "codex_start" {
+		if len(args) != 2 {
+			return errors.New("Codex start expects project and task")
+		}
+		project, projectOK := args["project"].(string)
+		task, taskOK := args["task"].(string)
+		if !projectOK || !taskOK || !utf8.ValidString(task) || utf8.RuneCountInString(strings.TrimSpace(task)) < 1 || utf8.RuneCountInString(task) > 4000 {
+			return errors.New("invalid Codex task")
+		}
+		for _, ch := range task {
+			if unicode.IsControl(ch) && ch != '\n' && ch != '\t' {
+				return errors.New("invalid Codex task text")
+			}
+		}
+		for _, item := range c.Projects {
+			if item.ID == project {
+				return nil
+			}
+		}
+		return errors.New("unknown Codex project")
+	}
+	if action == "codex_status" || action == "codex_cancel" {
+		id, ok := args["task_id"].(string)
+		if len(args) != 1 || !ok || (id != "latest" && !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id)) {
+			return errors.New("invalid Codex task ID")
+		}
+		return nil
 	}
 	field := map[string]string{"open_app": "id", "open_project": "id", "set_volume": "value", "media": "command", "search_web": "query", "lock": ""}[action]
 	if !pcActions[action] {
