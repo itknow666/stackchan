@@ -274,47 +274,62 @@ class Bridge:
 
     async def robot_preview(self,key):
         request=None
+        terminal=False
+        def report(state,cancel_requested):
+            messages={'unavailable':'机器人未开始试听：请保持待机并检查 SD 资源包',
+                      'failed':'机器人试听中断','cancelled':'机器人试听已停止',
+                      'completed':'机器人录音已播放结束；停止未确认' if cancel_requested else '机器人 SD 试听已播放完成'}
+            self.publish('last_result',messages[state])
         try:
             clip=self.rules[key].get('id',key)
             async with self.config_lock:
                 request=self.next_request()
-                await self.write('3',{'cmd':'playLocalClip','id':clip,'request_id':request})
-                # The firmware's bounded config mailbox keeps its latest write.
-                # Allow the owning task to consume play before a status query.
-                await asyncio.sleep(.15)
-                deadline=time.monotonic()+22
                 cancel_sent=False
-                while time.monotonic()<deadline:
-                    if self.robot_preview_cancel.is_set() and not cancel_sent:
-                        await self.write('3',{'cmd':'cancelLocalClip','request_id':request})
-                        cancel_sent=True
-                        await asyncio.sleep(.15) # consume cancel before the latest-mailbox status write
-                    await self.write('3',{'cmd':'getLocalClipStatus','request_id':request})
-                    reply=await self.config_reply(request,'local_clip',min(2,max(.01,deadline-time.monotonic())))
-                    state=reply.get('state')
-                    if state=='accepted':
-                        self.publish('last_result','机器人正在播放 SD 录音')
-                    elif state=='completed':
-                        # Firmware completion means decoder/output actually drained.
-                        self.publish('last_result','机器人 SD 试听已播放完成');return
-                    elif state in ('unavailable','failed','cancelled'):
-                        result={'unavailable':'机器人未开始试听：请保持待机并检查 SD 资源包',
-                                'failed':'机器人试听中断','cancelled':'机器人试听已停止'}[state]
-                        self.publish('last_result',result);return
-                    elif state!='pending': raise ValueError('无效机器人试听状态')
-                    await asyncio.sleep(.15)
-                raise TimeoutError('机器人试听结果未知，未重复播放')
+                try:
+                    await self.write('3',{'cmd':'playLocalClip','id':clip,'request_id':request})
+                    deadline=time.monotonic()+22
+                    last_state=None
+                    while time.monotonic()<deadline:
+                        if self.robot_preview_cancel.is_set() and not cancel_sent:
+                            await self.write('3',{'cmd':'cancelLocalClip','request_id':request})
+                            cancel_sent=True
+                            self.publish('last_result','正在等待机器人停止确认')
+                        # Never write a status query while a physical command
+                        # may be pending in the firmware's latest-only mailbox.
+                        # Notifications update this same readable GATT cache.
+                        try: reply=await self.config_reply(request,'local_clip',min(.3,max(.01,deadline-time.monotonic())))
+                        except TimeoutError: continue
+                        state=reply.get('state')
+                        if state in ('completed','unavailable','failed','cancelled'):
+                            terminal=True
+                            report(state,cancel_sent)
+                            return
+                        if state not in ('pending','accepted'): raise ValueError('无效机器人试听状态')
+                        if state!=last_state and not cancel_sent:
+                            self.publish('last_result','机器人正在播放 SD 录音' if state=='accepted' else '机器人已收到试听请求，等待播放')
+                        last_state=state
+                        await asyncio.sleep(.1)
+                    raise TimeoutError('机器人试听结果未知，未重复播放')
+                finally:
+                    if not terminal and self.client and self.client.is_connected:
+                        # At most one extra idempotent cancel. Retain the lock
+                        # while reading its terminal ACK so volume/storage
+                        # polling cannot immediately overwrite the cancellation.
+                        try:
+                            await self.write('3',{'cmd':'cancelLocalClip','request_id':request})
+                            cleanup_deadline=time.monotonic()+2
+                            while time.monotonic()<cleanup_deadline:
+                                try: reply=await self.config_reply(request,'local_clip',min(.3,max(.01,cleanup_deadline-time.monotonic())))
+                                except TimeoutError: continue
+                                if reply.get('state') in ('completed','unavailable','failed','cancelled'):
+                                    terminal=True
+                                    report(reply['state'],True)
+                                    break
+                            if not terminal: self.publish('last_result','机器人试听及停止结果未知，未重复播放')
+                        except Exception: pass
         except asyncio.CancelledError: raise
         except Exception:
-            self.publish('last_result','机器人试听未确认或已中断，未重复播放')
-        finally:
-            if request is not None and self.client and self.client.is_connected:
-                # Idempotent cancellation cannot stop another request or chat.
-                try:
-                    async with self.config_lock:
-                        await self.write('3',{'cmd':'cancelLocalClip','request_id':request})
-                        await asyncio.sleep(.15)
-                except Exception: pass
+            if not terminal: self.publish('last_result','机器人试听未确认或已中断，未重复播放')
 
     def preview_file(self,key):
         name=self.rules[key]['file']

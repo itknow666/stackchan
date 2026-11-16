@@ -111,7 +111,7 @@ class Contracts(unittest.TestCase):
         b.client=Device()
         asyncio.run(b.robot_preview('hello'))
         self.assertEqual(sent[0]['cmd'],'playLocalClip')
-        self.assertEqual(sent[-1]['cmd'],'cancelLocalClip')
+        self.assertEqual(sent[-1]['cmd'],'playLocalClip')
         self.assertEqual(sum(d['cmd']=='playLocalClip' for d in sent),1)
         self.assertIn(('last_result','机器人 SD 试听已播放完成'),published)
 
@@ -147,6 +147,98 @@ class Contracts(unittest.TestCase):
         self.assertIsNone(asyncio.run(b.storage_exchange()))
         self.assertIn(('storage_status','未知或固件不支持'),published)
         self.assertIn(('storage_clips','unknown'),published)
+
+    def test_preview_play_and_cancel_survive_slow_latest_mailbox_consumption(self):
+        # Match the actual latest-only config mailbox: a subsequent write can
+        # replace play/cancel until the firmware's owning task consumes it.
+        async def exercise(play_delay,cancel_delay,stop):
+            b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'})
+            b.rules={'hello':{'file':'hello.pcm'}}
+            published=[];b.publish=lambda *v:published.append(v)
+            class Device:
+                is_connected=True
+                latest=None
+                starts=0
+                cancelled=False
+                reply={'cmd':'volume','request_id':0,'value':53}
+                handles=[]
+                accepted=asyncio.Event()
+                async def write(self,suffix,data):
+                    self.latest=data
+                    delay=play_delay if data['cmd']=='playLocalClip' else (cancel_delay if data['cmd']=='cancelLocalClip' else .02)
+                    def consume():
+                        if self.latest is not data: return
+                        state=self.reply.get('state','unavailable')
+                        if data['cmd']=='playLocalClip':
+                            self.starts+=1;state='accepted';self.accepted.set()
+                            def finish():
+                                if not self.cancelled: self.reply={'cmd':'local_clip','request_id':data['request_id'],'state':'completed'}
+                            self.handles.append(asyncio.get_running_loop().call_later(1.2,finish))
+                        elif data['cmd']=='cancelLocalClip': self.cancelled=True;state='cancelled'
+                        self.reply={'cmd':'local_clip','request_id':data['request_id'],'state':state}
+                    self.handles.append(asyncio.get_running_loop().call_later(delay,consume))
+                async def read_gatt_char(self,uuid): return json.dumps(self.reply).encode()
+            device=Device();b.client=device;b.write=device.write
+            try:
+                task=asyncio.create_task(b.robot_preview('hello'))
+                if stop:
+                    await asyncio.wait_for(device.accepted.wait(),1)
+                    b.robot_preview_cancel.set()
+                await asyncio.wait_for(task,5)
+                self.assertEqual(device.starts,1,'play was overwritten before the owning task consumed it')
+                if stop:
+                    self.assertTrue(device.cancelled,'cancel was overwritten before consumption')
+                    self.assertIn(('last_result','机器人试听已停止'),published)
+                    self.assertNotIn(('last_result','机器人 SD 试听已播放完成'),published)
+                else:
+                    self.assertIn(('last_result','机器人 SD 试听已播放完成'),published)
+            finally:
+                for handle in device.handles: handle.cancel()
+        for delay in (.3,.5):
+            with self.subTest(command='play',delay=delay): asyncio.run(exercise(delay,.02,False))
+            with self.subTest(command='cancel',delay=delay): asyncio.run(exercise(.02,delay,True))
+
+    def test_preview_cleanup_holds_mailbox_until_delayed_cancel_ack(self):
+        b=Bridge({'mqtt_user':'test','mqtt_password':'test-only'})
+        b.rules={'hello':{'file':'hello.pcm'}}
+        published=[];b.publish=lambda *v:published.append(v)
+        async def exercise():
+            class Device:
+                is_connected=True
+                latest=None
+                cancelled=False
+                volume_before_cancel=False
+                reply={'cmd':'volume','request_id':0,'value':53}
+                started=asyncio.Event()
+                handles=[]
+                async def write(self,suffix,data):
+                    self.latest=data
+                    if data['cmd']=='getVolume': self.volume_before_cancel=not self.cancelled
+                    def consume():
+                        if self.latest is not data: return
+                        if data['cmd']=='playLocalClip':
+                            self.started.set()
+                            # Force the preview error path after the play was
+                            # consumed, then require its cleanup cancellation.
+                            self.reply={'cmd':'local_clip','request_id':data['request_id'],'state':'invalid'}
+                        elif data['cmd']=='cancelLocalClip':
+                            self.cancelled=True
+                            self.reply={'cmd':'local_clip','request_id':data['request_id'],'state':'cancelled'}
+                        elif data['cmd']=='getVolume': self.reply={'cmd':'volume','request_id':data['request_id'],'value':53}
+                    self.handles.append(asyncio.get_running_loop().call_later(.5 if data['cmd']=='cancelLocalClip' else .02,consume))
+                async def read_gatt_char(self,uuid): return json.dumps(self.reply).encode()
+            device=Device();b.client=device;b.write=device.write
+            try:
+                preview=asyncio.create_task(b.robot_preview('hello'))
+                await device.started.wait()
+                volume=asyncio.create_task(b.volume_exchange())
+                await asyncio.wait_for(asyncio.gather(preview,volume),3)
+                self.assertTrue(device.cancelled)
+                self.assertFalse(device.volume_before_cancel,'volume overwrote an unconsumed cleanup cancellation')
+                self.assertIn(('last_result','机器人试听已停止'),published)
+            finally:
+                for handle in device.handles: handle.cancel()
+        asyncio.run(exercise())
 
 def live():
     cfg=json.loads((Path(__file__).parent/'local-config.json').read_text())
