@@ -49,3 +49,13 @@ add_executable(sd_voice_file_test sd_voice_file_test.cpp
 target_include_directories(sd_voice_file_test PRIVATE ${ARDUINOJSON_INCLUDE_DIR})
 target_compile_features(sd_voice_file_test PRIVATE cxx_std_17)
 add_test(NAME sd_voice_file_test COMMAND $<TARGET_FILE:sd_voice_file_test>)
+
+set(STACKCHAN_AUDIO_SERVICE_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../xiaozhi-esp32/main/audio/audio_service.cc"
+    CACHE FILEPATH "Patched audio service source for the SDK-free decoder lock test")
+if(EXISTS "${STACKCHAN_AUDIO_SERVICE_SOURCE}")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME decoder_configuration_lock_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/check_decoder_lock.py
+        ${STACKCHAN_AUDIO_SERVICE_SOURCE} --compiler ${CMAKE_CXX_COMPILER})
+endif()

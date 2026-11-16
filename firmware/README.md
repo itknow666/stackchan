@@ -31,6 +31,24 @@ cmake --build build-host-tests
 ctest --test-dir build-host-tests --output-on-failure
 ```
 
+After the normal dependency fetch has applied the public firmware patch, run
+the SDK-free concurrency harness against its actual decoder method:
+
+```bash
+python3 tests/check_decoder_lock.py xiaozhi-esp32/main/audio/audio_service.cc
+```
+
+CMake also registers this test when that dependency exists. For an external
+build stage, set `-DSTACKCHAN_AUDIO_SERVICE_SOURCE=/absolute/path/audio_service.cc`.
+The header-only clean-checkout CI job runs the seven dependency-independent
+tests; this additional test requires the patched source, not ESP-IDF.
+
+The harness stalls decoder creation and makes another thread attempt the same
+lock used by cancellation/reset. It checks that reset cannot enter until the
+new handle, format and resampler are fully published. Decoder setup/decode
+release `decoder_mutex_` before reacquiring `audio_queue_mutex_`; cancellation
+may take the queue mutex then decoder mutex, never the reverse order.
+
 ### Flash
 
 ```bash
