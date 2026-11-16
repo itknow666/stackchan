@@ -134,7 +134,11 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 	// backend (OpenAI Realtime, Gemini Live, ...) — see provider.go.
 	cb := RealtimeCallbacks{
 		OnLocalClip: func(turnCtx context.Context, pack, clip string) localAudioOutcome {
-			return s.localAudio.play(turnCtx, pack, clip, func() { s.startPlayback(true) }, s.sendJSON)
+			return s.localAudio.play(turnCtx, pack, clip, localAudioTransport{
+				Start: func(callCtx context.Context) error { return s.startPlaybackContext(callCtx, true) },
+				Send:  s.sendJSONContext,
+				Close: s.closeTransport,
+			})
 		},
 		OnClose: func() {
 			// Provider session ended (error or normal). Close the device
@@ -360,10 +364,20 @@ func (s *wsSession) isPlaybackStarted() bool {
 // startPlayback waits for a small, configurable jitter buffer before sending
 // tts:start. It prevents short upstream delivery gaps from becoming audible.
 func (s *wsSession) startPlayback(force bool) {
-	s.mu.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), deviceWriteTimeout)
+	defer cancel()
+	if s.startPlaybackContext(ctx, force) != nil {
+		s.closeTransport()
+	}
+}
+
+func (s *wsSession) startPlaybackContext(ctx context.Context, force bool) error {
+	if err := lockDeviceMutex(ctx, &s.mu); err != nil {
+		return err
+	}
 	if s.playbackStarted || s.opusEnc == nil || (!force && len(s.frameQueue) < s.prebufferFrames) {
 		s.mu.Unlock()
-		return
+		return nil
 	}
 	s.playbackStarted = true
 	if s.prebufferTimer != nil {
@@ -379,10 +393,14 @@ func (s *wsSession) startPlayback(force bool) {
 	// request must not observe playbackStarted before tts:start is on the wire.
 	defer s.mu.Unlock()
 	if pose != nil {
-		_ = s.sendJSON(map[string]any{"type": "dania_pose", "yaw": pose.Yaw, "pitch": pose.Pitch, "roll": pose.Roll})
+		if err := s.sendJSONContext(ctx, map[string]any{"type": "dania_pose", "yaw": pose.Yaw, "pitch": pose.Pitch, "roll": pose.Roll}); err != nil {
+			return err
+		}
 	}
-	_ = s.sendJSON(map[string]any{"type": "llm", "emotion": emotion})
-	_ = s.sendJSON(map[string]any{"type": "tts", "state": "start"})
+	if err := s.sendJSONContext(ctx, map[string]any{"type": "llm", "emotion": emotion}); err != nil {
+		return err
+	}
+	return s.sendJSONContext(ctx, map[string]any{"type": "tts", "state": "start"})
 }
 
 // drainFrameQueue discards all pending frames (called on abort or new response start).
@@ -640,22 +658,22 @@ func (s *wsSession) logTurnLatency(ctx context.Context, stage string) {
 }
 
 func (s *wsSession) sendJSON(v any) error {
+	return s.sendJSONContext(context.Background(), v)
+}
+
+func (s *wsSession) sendJSONContext(ctx context.Context, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.conn.WriteMessage(websocket.TextMessage, data)
+	return s.writeDeviceMessage(ctx, websocket.TextMessage, data)
 }
 
 func (s *wsSession) sendAudio(frame []byte) error {
 	// BinaryProtocol3: [0x00][0x00][payload_size hi][payload_size lo][payload]
 	header := [4]byte{0x00, 0x00, byte(len(frame) >> 8), byte(len(frame))}
 	msg := append(header[:], frame...)
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.conn.WriteMessage(websocket.BinaryMessage, msg)
+	return s.writeDeviceMessage(context.Background(), websocket.BinaryMessage, msg)
 }
 
 func (s *wsSession) pingLoop(ctx context.Context) {
@@ -664,9 +682,12 @@ func (s *wsSession) pingLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			s.writeMu.Lock()
-			_ = s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second))
-			s.writeMu.Unlock()
+			// WriteControl is safe alongside the data writer and has its own
+			// deadline; it must not wait behind a stalled data-write mutex.
+			if s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(deviceWriteTimeout)) != nil {
+				s.closeTransport()
+				return
+			}
 		case <-ctx.Done():
 			return
 		}

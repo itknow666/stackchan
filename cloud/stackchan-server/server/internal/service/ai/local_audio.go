@@ -112,7 +112,58 @@ func (l *localAudioLink) close() {
 	}
 }
 
-func (l *localAudioLink) play(ctx context.Context, pack, clip string, start func(), send func(any) error) localAudioOutcome {
+// These owned callbacks must return when ctx is cancelled or Close closes the
+// socket. call joins its operation before returning: no orphan writer survives
+// a timeout. Ordinary cancellation while waiting for a device ACK does not close
+// the connection; it first sends a bounded cancellation for the old request.
+type localAudioTransport struct {
+	Start func(context.Context) error
+	Send  func(context.Context, any) error
+	Close func()
+}
+
+func (t localAudioTransport) call(ctx context.Context, operation func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- operation(ctx) }()
+	finish := func(err error) error {
+		if ctx.Err() == context.DeadlineExceeded {
+			t.Close()
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	select {
+	case err := <-done:
+		return finish(err)
+	case <-ctx.Done():
+	}
+	// Context-aware mutex acquisition can finish immediately. Give that path a
+	// tiny bounded grace before closing an otherwise healthy barge-in socket.
+	grace := time.NewTimer(5 * time.Millisecond)
+	defer grace.Stop()
+	select {
+	case err := <-done:
+		return finish(err)
+	case <-grace.C:
+		t.Close() // closes without the write mutex, interrupting a stuck socket write
+		<-done    // join the writer after Close/context has unblocked it
+		return ctx.Err()
+	}
+}
+
+func (l *localAudioLink) play(ctx context.Context, pack, clip string, transport localAudioTransport) localAudioOutcome {
+	timeout := l.timeout
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	// Start the real deadline at entry, before tts:start or request transmission.
+	playCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	l.mu.Lock()
 	if l.closed || !validLocalAudioID(pack) || !validLocalAudioID(clip) || l.pack != pack || !l.clips[clip] {
 		l.mu.Unlock()
@@ -124,10 +175,6 @@ func (l *localAudioLink) play(ctx context.Context, pack, clip string, start func
 	}
 	p := &localAudioPending{id: uuid.NewString(), result: make(chan localAudioOutcome, 1)}
 	l.pending = p
-	timeout := l.timeout
-	if timeout <= 0 {
-		timeout = 20 * time.Second
-	}
 	l.mu.Unlock()
 	defer func() {
 		l.mu.Lock()
@@ -136,25 +183,39 @@ func (l *localAudioLink) play(ctx context.Context, pack, clip string, start func
 		}
 		l.mu.Unlock()
 	}()
-	if ctx.Err() != nil {
+	if playCtx.Err() != nil || transport.Start == nil || transport.Send == nil || transport.Close == nil {
 		return LocalAudioInterrupted
+	}
+	cancelRequest := func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), min(timeout, 250*time.Millisecond))
+		defer cleanupCancel()
+		_ = transport.call(cleanupCtx, func(callCtx context.Context) error {
+			return transport.Send(callCtx, map[string]any{"type": "local_audio_cancel", "request_id": p.id})
+		})
 	}
 	// tts:start must precede the local request on the same socket, so firmware
 	// schedules Speaking/ResetDecoder before acquiring its local audio lease.
-	start()
-	if send(map[string]any{"type": "local_audio", "request_id": p.id, "pack_id": pack, "clip_id": clip, "timeout_ms": 20000}) != nil {
+	if transport.call(playCtx, transport.Start) != nil {
 		return LocalAudioInterrupted
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	if transport.call(playCtx, func(callCtx context.Context) error {
+		return transport.Send(callCtx, map[string]any{"type": "local_audio", "request_id": p.id, "pack_id": pack, "clip_id": clip, "timeout_ms": 20000})
+	}) != nil {
+		// A failed or cancelled send may still have delivered the request.
+		// Cancel that exact ID rather than leave an uncertain local clip running.
+		cancelRequest()
+		return LocalAudioInterrupted
+	}
 	select {
 	case result := <-p.result:
 		return result
-	case <-ctx.Done():
-	case <-timer.C:
+	case <-playCtx.Done():
 	}
 	// Result loss can mean the device has already played some/all of the clip.
 	// Cancel it and end this response; replaying the full PCM would duplicate it.
-	_ = send(map[string]any{"type": "local_audio_cancel", "request_id": p.id})
+	// An independent short grace lets ordinary barge-in cancel the old clip
+	// without dropping this connection/new recording. A blocked cancel closes
+	// only this socket and joins its transport operation before returning.
+	cancelRequest()
 	return LocalAudioInterrupted
 }

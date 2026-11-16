@@ -34,7 +34,7 @@ func TestLocalAudioWebSocketHandshakeAndPhysicalCompletion(t *testing.T) {
 		link.negotiate(hello["local_audio"])
 		done := make(chan localAudioOutcome, 1)
 		go func() {
-			done <- link.play(ctx, "pack", "clip", func() { _ = conn.WriteJSON(map[string]any{"type": "tts", "state": "start"}) }, conn.WriteJSON)
+			done <- playLocalForTest(&link, ctx, "pack", "clip", func() { _ = conn.WriteJSON(map[string]any{"type": "tts", "state": "start"}) }, conn.WriteJSON)
 		}()
 		for {
 			var ack map[string]any
@@ -103,11 +103,21 @@ func localAck(l *localAudioLink, id, state string) {
 	l.acknowledge(map[string]any{"request_id": id, "state": state})
 }
 
+// Existing protocol tests use short, nonblocking callbacks. Production uses
+// context-aware wsSession methods plus Close to unblock and join data writes.
+func playLocalForTest(l *localAudioLink, ctx context.Context, pack, clip string, start func(), send func(any) error) localAudioOutcome {
+	return l.play(ctx, pack, clip, localAudioTransport{
+		Start: func(context.Context) error { start(); return nil },
+		Send:  func(_ context.Context, raw any) error { return send(raw) },
+		Close: func() {},
+	})
+}
+
 func TestLocalAudioNegotiationRequiresExactSafePack(t *testing.T) {
 	for _, raw := range []any{nil, localHello("wrong", "clip"), localHello("pack", "other"), localHello("pack", "../clip"), localHello("pack", "clip", "clip"), localHello("../pack", "clip"), localHello("pack")} {
 		l := localAudioLink{}
 		l.negotiate(raw)
-		got := l.play(context.Background(), "pack", "clip", func() { t.Fatal("started incompatible local audio") }, func(any) error { t.Fatal("sent incompatible local audio"); return nil })
+		got := playLocalForTest(&l, context.Background(), "pack", "clip", func() { t.Fatal("started incompatible local audio") }, func(any) error { t.Fatal("sent incompatible local audio"); return nil })
 		if got != LocalAudioUnavailable {
 			t.Fatalf("%v: %v", raw, got)
 		}
@@ -135,7 +145,7 @@ func TestLocalAudioAcknowledgementsAndNoReplay(t *testing.T) {
 		l.negotiate(localHello("pack", "clip"))
 		started := false
 		calls := 0
-		got := l.play(context.Background(), "pack", "clip", func() { started = true }, func(raw any) error {
+		got := playLocalForTest(&l, context.Background(), "pack", "clip", func() { started = true }, func(raw any) error {
 			if !started {
 				t.Fatal("local request preceded tts:start")
 			}
@@ -164,7 +174,7 @@ func TestLocalAudioTimeoutCancellationDisconnectAndSendFailure(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			cancelMessages := 0
-			got := l.play(ctx, "pack", "clip", func() {}, func(raw any) error {
+			got := playLocalForTest(&l, ctx, "pack", "clip", func() {}, func(raw any) error {
 				msg := raw.(map[string]any)
 				if msg["type"] == "local_audio_cancel" {
 					cancelMessages++
@@ -199,7 +209,7 @@ func TestLocalAudioStaleResultCannotEndNewRequest(t *testing.T) {
 	l.negotiate(localHello("pack", "clip"))
 	old := ""
 	for n := 0; n < 2; n++ {
-		got := l.play(context.Background(), "pack", "clip", func() {}, func(raw any) error {
+		got := playLocalForTest(&l, context.Background(), "pack", "clip", func() {}, func(raw any) error {
 			id := raw.(map[string]any)["request_id"].(string)
 			if id == old {
 				t.Fatal("request ID reused")
@@ -225,7 +235,7 @@ func TestLocalAudioConcurrentRequestBound(t *testing.T) {
 	sent := make(chan struct{})
 	done := make(chan localAudioOutcome)
 	go func() {
-		done <- l.play(ctx, "pack", "clip", func() {}, func(raw any) error {
+		done <- playLocalForTest(&l, ctx, "pack", "clip", func() {}, func(raw any) error {
 			if raw.(map[string]any)["type"] == "local_audio" {
 				close(sent)
 			}
@@ -233,7 +243,7 @@ func TestLocalAudioConcurrentRequestBound(t *testing.T) {
 		})
 	}()
 	<-sent
-	if l.play(ctx, "pack", "clip", func() { t.Fatal("second start") }, func(any) error { t.Fatal("second send"); return nil }) != LocalAudioInterrupted {
+	if playLocalForTest(&l, ctx, "pack", "clip", func() { t.Fatal("second start") }, func(any) error { t.Fatal("second send"); return nil }) != LocalAudioInterrupted {
 		t.Fatal("concurrent request admitted")
 	}
 	cancel()
