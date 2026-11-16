@@ -1,0 +1,3 @@
+websockets>=15,<17
+pycaw>=20251023; sys_platform == "win32"
+comtypes>=1.4.11; sys_platform == "win32"

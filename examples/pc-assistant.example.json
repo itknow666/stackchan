@@ -1,0 +1,10 @@
+{
+  "endpoint": "wss://your-server.example.com/dania/pc/ws",
+  "token": "",
+  "pc_id": "desktop",
+  "dry_run": true,
+  "actions": ["open_app", "open_project", "set_volume", "media", "search_web", "lock"],
+  "apps": [],
+  "projects": [],
+  "state_file": "private/status.json"
+}
