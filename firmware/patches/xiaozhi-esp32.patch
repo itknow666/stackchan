@@ -259,9 +259,27 @@ index 03e2baa..1cf9ae8 100644
      }
  
 diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
-index 7f7582b..f697b05 100644
+index 7f7582b..fda96da 100644
 --- a/main/audio/audio_service.cc
 +++ b/main/audio/audio_service.cc
+@@ -139,7 +139,7 @@ void AudioService::Start() {
+             audio_service->AudioOutputTask();
+             vTaskDelete(NULL);
+         },
+-        "audio_output", 2048 * 2, this, 4, &audio_output_task_handle_);
++        "audio_output", 2048 * 2, this, 6, &audio_output_task_handle_);
+ #else
+     /* Start the audio input task */
+     xTaskCreate(
+@@ -157,7 +157,7 @@ void AudioService::Start() {
+             audio_service->AudioOutputTask();
+             vTaskDelete(NULL);
+         },
+-        "audio_output", 2048, this, 4, &audio_output_task_handle_);
++        "audio_output", 2048, this, 6, &audio_output_task_handle_);
+ #endif
+ 
+     /* Start the opus codec task */
 @@ -167,7 +167,7 @@ void AudioService::Start() {
              audio_service->OpusCodecTask();
              vTaskDelete(NULL);
