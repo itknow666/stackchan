@@ -144,9 +144,12 @@ type RealtimeCallbacks struct {
 	OnSTT       func(string)  // user speech transcript
 	OnText      func(string)  // model text reply (logging only)
 	OnAudio     func([]int16) // 24kHz PCM chunk to play back to the device
-	OnStart     func()        // model began speaking
-	OnStop      func()        // model finished speaking
-	OnClose     func()        // provider connection ended (any reason — error or normal)
+	// Turn-based providers supply their cancellation context while waiting for
+	// bounded playback capacity. Streaming providers may retain OnAudio.
+	OnAudioContext func(context.Context, []int16) error
+	OnStart        func() // model began speaking
+	OnStop         func() // model finished speaking
+	OnClose        func() // provider connection ended (any reason — error or normal)
 }
 
 // dialProvider selects the configured backend and opens a
