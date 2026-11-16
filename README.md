@@ -4,6 +4,8 @@
 
 这是个人定制版本，保留固件、云端服务、Windows 电脑助手与本机 Home Assistant 桥接源码。旧独立供电、触摸与开机键问题已由用户确认修复。新功能的自动检查与人工验收分别记录，详见[验证记录](docs/verification.md)。
 
+十一月十六日更新：关闭记事本后连续两次用相同口令重新打开，已获用户确认。聊天音频候选版也已确认连续流畅，但仍有一次未导致重启的 AFE 看门狗告警，保留在[草稿 PR #1](https://github.com/itknow666/stackchan/pull/1)，尚未合入主分支。下一步设计见[智能化方案](docs/intelligence-plan.md)。
+
 ## 已实现
 
 - AI Agent 内同时运行 Wi-Fi 对话和 BLE 控制，无须切换到 DANCE。
