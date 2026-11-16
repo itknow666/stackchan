@@ -5,6 +5,15 @@ The standalone Compose runtime passes through `STACKCHAN_ROBOT_TOOLS` and
 `STACKCHAN_VOICE_PACK_DIR`; both remain disabled by default. See the root setup
 guide for private voice imports, the Windows BLE console, and current hardware limits.
 
+An opt-in computer relay serves `/dania/pc/ws`. Set `STACKCHAN_PC_TOKEN` (at
+least 32 characters), `STACKCHAN_PC_ID` (default `desktop`) and an explicit
+comma-separated `STACKCHAN_PC_DEVICE_IDS` allowlist of authorized robots.
+Only compatible voice sessions for those devices can use the connected PC's
+allowlisted application/project, volume, media, browser-search and lock tools.
+The Windows helper makes an outgoing WSS connection; no PC inbound port is needed.
+Results are acknowledged, simulation remains explicit, and timeout/disconnect
+outcomes are never retried automatically. See [the relay protocol](docs/pc-relay.md).
+
 Local deployment addition (2026-11-14): configuring the compatible pipeline
 with `https://api.deepseek.com` uses DeepSeek's native `/v1/tools/asr` and
 `/v1/tools/tts` speech APIs. Use `deepseek-flash`, voice `stella` or `tide`,

@@ -4,6 +4,13 @@
 独立 Compose 支持透传 `STACKCHAN_ROBOT_TOOLS` 和 `STACKCHAN_VOICE_PACK_DIR`，
 默认不启用。私人语音导入、Windows 蓝牙控制台与当前硬件限制见根目录部署说明。
 
+可选电脑中继位于 `/dania/pc/ws`。必须同时设置至少三十二字符的私有
+`STACKCHAN_PC_TOKEN`、电脑标识 `STACKCHAN_PC_ID`（默认 `desktop`）和
+`STACKCHAN_PC_DEVICE_IDS` 机器人设备白名单才能启用。只有白名单设备的兼容语音
+会话可以调用已连接电脑声明的软件、项目、音量、媒体、网页搜索和锁屏工具。
+Windows 助手主动建立 WSS 连接，电脑无需开放入站端口；模型收到实际回执后才
+获得执行结果，模拟结果明确标识，超时或断线均不自动重试。见[中继协议](docs/pc-relay.md)。
+
 本地部署补充（2026-11-14）：兼容接口配置为 `https://api.deepseek.com`
 时，使用 DeepSeek 新增的 `/v1/tools/asr` 与 `/v1/tools/tts` 语音接口。
 模型使用 `deepseek-flash`，声音选择 `stella` 或 `tide`，听写、对话和朗读

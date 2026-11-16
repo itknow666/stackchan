@@ -53,6 +53,11 @@ var (
 				ai.HandleWS(r.Response.Writer, r.Request)
 			})
 
+			// Outgoing authenticated computer connections; disabled without explicit configuration.
+			s.BindHandler("/dania/pc/ws", func(r *ghttp.Request) {
+				ai.HandlePCWS(r.Response.Writer, r.Request)
+			})
+
 			// heartBeat
 			boot.InitCron()
 

@@ -1,0 +1,88 @@
+package ai
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestPCActionArgumentsAndDynamicCapabilities(t *testing.T) {
+	c := pcTestCaps()
+	for _, test := range []struct {
+		action, args string
+		valid        bool
+	}{
+		{"open_app", `{"id":"browser"}`, true},
+		{"open_project", `{"id":"robot"}`, true},
+		{"set_volume", `{"value":0}`, true},
+		{"set_volume", `{"value":100}`, true},
+		{"media", `{"command":"next"}`, true},
+		{"search_web", `{"query":" 搜索中文 "}`, true},
+		{"lock", `{}`, true},
+		{"open_app", `{"id":"cmd"}`, false},
+		{"open_project", `{"id":"browser"}`, false},
+		{"set_volume", `{"value":100.1}`, false},
+		{"set_volume", `{"value":-1}`, false},
+		{"set_volume", `{"value":true}`, false},
+		{"set_volume", `{"value":"30"}`, false},
+		{"lock", `{"shell":"anything"}`, false},
+		{"media", `{"command":"play"}`, false},
+		{"search_web", `{"query":"\nhello"}`, false},
+		{"search_web", `{"query":"   "}`, false},
+		{"search_web", `{"query":"` + strings.Repeat("中", 301) + `"}`, false},
+		{"open_app", `{"path":"C:/anything"}`, false},
+		{"shell", `{}`, false},
+		{"lock", `null`, false},
+	} {
+		var args map[string]any
+		if err := json.Unmarshal([]byte(test.args), &args); err != nil {
+			t.Fatal(err)
+		}
+		if err := validatePCAction(c, test.action, args); (err == nil) != test.valid {
+			t.Errorf("%s %s: err=%v", test.action, test.args, err)
+		}
+	}
+	r, s := newPCTestServer(t)
+	control := pcControlFor(r, "robot-allowed")
+	if len(control.tools()) != 0 {
+		t.Fatal("offline PC advertised tools")
+	}
+	conn, _, err := pcDial(t, s, pcTestToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	limited := pcCapabilities{Apps: []pcItem{{ID: "browser", Name: "Browser"}}, Projects: []pcItem{}, Actions: []string{"open_app"}}
+	conn.WriteJSON(pcHello{Type: "hello", Version: 1, PCID: "desktop", Capabilities: limited})
+	var ready map[string]any
+	if err := conn.ReadJSON(&ready); err != nil {
+		t.Fatal(err)
+	}
+	pcWait(t, func() bool { return r.connected("robot-allowed") != nil })
+	tools := control.tools()
+	if len(tools) != 1 || tools[0]["function"].(map[string]any)["name"] != "pc_open_app" {
+		t.Fatalf("advertised unavailable capability: %v", tools)
+	}
+	if _, err := control.dispatch(context.Background(), &pcTurn{}, "pc_lock", map[string]any{}); err == nil {
+		t.Fatal("unadvertised tool was executed")
+	}
+	conn.Close()
+	pcWait(t, func() bool { return r.connected("robot-allowed") == nil })
+	if len(control.tools()) != 0 {
+		t.Fatal("disconnected capabilities leaked")
+	}
+}
+
+func TestPCStrictJSON(t *testing.T) {
+	for _, raw := range []string{`{"a":1,"a":2}`, `{"nested":{"a":1,"a":2}}`, `{"a":NaN}`, `{} {}`, `[]`, `"text"`, `{"a":"` + string([]byte{255}) + `"}`} {
+		var result map[string]any
+		if err := strictPCJSON([]byte(raw), &result); err == nil {
+			t.Fatalf("bad JSON accepted: %q", raw)
+		}
+	}
+	var result map[string]any
+	if err := strictPCJSON([]byte(`{"nested":{"a":1},"list":[1,{"b":2}]}`), &result); err != nil {
+		t.Fatal(err)
+	}
+}

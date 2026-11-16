@@ -24,6 +24,7 @@ import (
 )
 
 type compatibleConfig struct {
+	PC                                     *pcControl
 	STTBaseURL, STTAPIKey, STTModel        string
 	LLMBaseURL, LLMAPIKey, LLMModel        string
 	TTSBaseURL, TTSAPIKey, TTSModel, Voice string
@@ -62,6 +63,7 @@ func dialCompatibleSession(ctx context.Context, cfg compatibleConfig, ha *haWSCl
 		ttsClient: newOpenAIClient(cfg.TTSBaseURL, cfg.TTSAPIKey, "", "", cfg.TTSModel, cfg.Voice, ""),
 		ha:        ha, cb: cb, ctx: childCtx, cancel: cancel,
 	}
+	s.llmClient.pc = cfg.PC
 	if os.Getenv("STACKCHAN_ROBOT_TOOLS") == "1" && cb.OnEmotion != nil && cb.OnPose != nil {
 		s.llmClient.robot = &robotControl{emotion: cb.OnEmotion, pose: cb.OnPose}
 	}

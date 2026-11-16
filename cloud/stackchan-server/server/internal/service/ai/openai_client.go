@@ -24,6 +24,7 @@ import (
 
 type openAIClient struct {
 	robot     *robotControl
+	pc        *pcControl
 	baseURL   string
 	apiKey    string
 	model     string
@@ -154,24 +155,27 @@ func (c *openAIClient) Chat(ctx context.Context, history []chatMessage, ha *haWS
 	msgs := make([]chatMessage, 0, len(history)+1)
 	msgs = append(msgs, chatMessage{Role: "system", Content: sysContent})
 	msgs = append(msgs, history...)
-	tools := haOpenAITools(ha)
-	if c.robot != nil {
-		tools = append(tools, robotToolDefs()...)
-	}
+	baseTools := haOpenAITools(ha)
+	pcTurn := &pcTurn{}
 	robotCalls := 0
 	emotionSet := false
 
 	for round := 0; round < 8; round++ {
+		tools := append([]map[string]any{}, baseTools...)
+		if c.robot != nil && robotCalls < 3 {
+			tools = append(tools, robotToolDefs()...)
+		}
+		if pcTurn.calls < 4 {
+			tools = append(tools, c.pc.tools()...)
+		}
 		payload := map[string]any{
 			"model":    c.model,
 			"messages": msgs,
 			"tools":    tools,
 		}
 		if c.robot != nil {
-			if !emotionSet {
+			if !emotionSet && robotCalls < 3 {
 				payload["tool_choice"] = map[string]any{"type": "function", "function": map[string]string{"name": "set_emotion"}}
-			} else if robotCalls >= 3 {
-				payload["tool_choice"] = "none"
 			}
 		}
 		if c.usesDeepSeekSpeech() {
@@ -209,11 +213,20 @@ func (c *openAIClient) Chat(ctx context.Context, history []chatMessage, ha *haWS
 		msgs = append(msgs, chatMessage{Role: "assistant", ToolCalls: choice.ToolCalls})
 		for _, tc := range choice.ToolCalls {
 			var args map[string]any
-			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
-			g.Log().Infof(logCtx, "[HA] tool=%s args=%v", tc.Function.Name, args)
+			argsErr := strictPCJSON([]byte(tc.Function.Arguments), &args)
+			isPC := strings.HasPrefix(tc.Function.Name, "pc_")
+			if !isPC {
+				g.Log().Infof(logCtx, "[HA] tool=%s args=%v", tc.Function.Name, args)
+			}
 			var result string
 			var dispErr error
-			if c.robot != nil && (tc.Function.Name == "set_emotion" || tc.Function.Name == "set_pose") {
+			if isPC {
+				if argsErr != nil || args == nil {
+					dispErr = fmt.Errorf("invalid computer arguments")
+				} else {
+					result, dispErr = c.pc.dispatch(ctx, pcTurn, tc.Function.Name, args)
+				}
+			} else if c.robot != nil && (tc.Function.Name == "set_emotion" || tc.Function.Name == "set_pose") {
 				if ctx.Err() != nil {
 					return "", ctx.Err()
 				}
@@ -232,7 +245,9 @@ func (c *openAIClient) Chat(ctx context.Context, history []chatMessage, ha *haWS
 			if dispErr != nil {
 				result = "error: " + dispErr.Error()
 			}
-			g.Log().Infof(logCtx, "[HA] tool=%s result=%s", tc.Function.Name, result)
+			if !isPC {
+				g.Log().Infof(logCtx, "[HA] tool=%s result=%s", tc.Function.Name, result)
+			}
 			msgs = append(msgs, chatMessage{
 				Role:       "tool",
 				Content:    result,

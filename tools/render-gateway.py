@@ -11,6 +11,7 @@ domain=cfg['domain'];device=cfg['device_id'];upstream=cfg.get('upstream','127.0.
 if not re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?',domain):raise SystemExit('Invalid domain')
 if not re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}',device):raise SystemExit('Invalid device identifier')
 if not re.fullmatch(r'127\.0\.0\.1:[0-9]{1,5}',upstream):raise SystemExit('Upstream must be a loopback listener')
+if type(cfg.get('pc_relay_enabled',False)) is not bool:raise SystemExit('pc_relay_enabled must be boolean')
 os.umask(0o077)
 args.output.mkdir(parents=True,exist_ok=True)
 access_path=args.output/'device-access.json'
@@ -44,10 +45,16 @@ DOMAIN {
         rewrite * /xiaozhi/ws
         reverse_proxy UPSTREAM
     }
-    handle {
+PC_RELAY_ROUTE    handle {
         respond 404
     }
 }
 '''.replace('DOMAIN',domain).replace('PREFIX',prefix).replace('OTA_JSON',ota).replace('DEVICE_ID',re.escape(device)).replace('UPSTREAM',upstream)
+pc_route = f'''    @computer path /dania/pc/ws
+    handle @computer {{
+        reverse_proxy {upstream}
+    }}
+''' if cfg.get('pc_relay_enabled',False) else ''
+config=config.replace('PC_RELAY_ROUTE',pc_route)
 (args.output/'Caddyfile').write_text(config)
 print('Private gateway files generated; device URLs are not printed')

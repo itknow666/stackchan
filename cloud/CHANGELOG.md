@@ -1,5 +1,13 @@
 # Changelog
 
+## Agent computer relay (2026-11-16, opt-in)
+
+- Added an authenticated outgoing-PC WebSocket relay with explicit robot authorization, live allowlisted capabilities, bounded pending requests and lifecycle cleanup.
+- Added compatible voice-model computer tools with validated arguments, actual execution results, simulation markers, per-turn limits and duplicate-action suppression.
+- Kept computer tools available after the independent robot expression/pose budget is exhausted; PC arguments and results are excluded from tool logs.
+- Passed disabled-by-default computer-relay settings through standalone Compose and documented the optional gateway route.
+
+
 ## Dania source snapshot (2026-11-15)
 
 - Integrated the customized firmware, private-audio import workflow and Windows BLE/MQTT console in the parent repository.
