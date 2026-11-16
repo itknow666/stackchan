@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -33,6 +34,64 @@ type recordedVoice struct {
 	PCM        []int16
 }
 
+type recordedVoiceIndex struct {
+	pack    recordedVoicePack
+	aliases []string
+	rules   map[string]int
+}
+
+// Cache only the active manifest. File identity also detects atomic replacement
+// when a new manifest retains the old modification time and size.
+var voiceManifestCache struct {
+	sync.Mutex
+	path  string
+	stat  os.FileInfo
+	index *recordedVoiceIndex
+}
+
+func loadRecordedVoiceIndex(dir string) (*recordedVoiceIndex, error) {
+	path := filepath.Join(dir, "manifest.json")
+	voiceManifestCache.Lock()
+	defer voiceManifestCache.Unlock()
+	stat, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if voiceManifestCache.path == path && voiceManifestCache.stat != nil &&
+		os.SameFile(stat, voiceManifestCache.stat) && stat.Size() == voiceManifestCache.stat.Size() &&
+		stat.ModTime().Equal(voiceManifestCache.stat.ModTime()) {
+		return voiceManifestCache.index, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 128*1024 {
+		return nil, fmt.Errorf("voice manifest exceeds 128 KiB")
+	}
+	index := &recordedVoiceIndex{rules: make(map[string]int)}
+	if err := json.Unmarshal(data, &index.pack); err != nil {
+		return nil, fmt.Errorf("invalid voice manifest")
+	}
+	for _, alias := range index.pack.Aliases {
+		if alias = normalizeVoicePhrase(alias); alias != "" {
+			index.aliases = append(index.aliases, alias)
+		}
+	}
+	for i, rule := range index.pack.Rules {
+		for _, trigger := range rule.Triggers {
+			phrase := normalizeVoicePhrase(trigger)
+			if previous, exists := index.rules[phrase]; exists && previous != i {
+				index.rules[phrase] = -1
+			} else if !exists {
+				index.rules[phrase] = i
+			}
+		}
+	}
+	voiceManifestCache.path, voiceManifestCache.stat, voiceManifestCache.index = path, stat, index
+	return index, nil
+}
+
 func normalizeVoicePhrase(text string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) || unicode.IsPunct(r) {
@@ -48,17 +107,11 @@ func recordedVoiceForText(dir, text string) (recordedVoice, bool, error) {
 	if dir == "" {
 		return recordedVoice{}, false, nil
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	index, err := loadRecordedVoiceIndex(dir)
 	if err != nil {
 		return recordedVoice{}, false, err
 	}
-	if len(data) > 128*1024 {
-		return recordedVoice{}, false, fmt.Errorf("voice manifest exceeds 128 KiB")
-	}
-	var pack recordedVoicePack
-	if err := json.Unmarshal(data, &pack); err != nil {
-		return recordedVoice{}, false, fmt.Errorf("invalid voice manifest")
-	}
+	pack := &index.pack
 	if !pack.Enabled {
 		return recordedVoice{}, false, nil
 	}
@@ -66,8 +119,8 @@ func recordedVoiceForText(dir, text string) (recordedVoice, bool, error) {
 		return recordedVoice{}, false, fmt.Errorf("voice pack must use 24 kHz mono PCM16")
 	}
 	phrase := normalizeVoicePhrase(text)
-	for _, alias := range pack.Aliases {
-		if prefix := normalizeVoicePhrase(alias); prefix != "" && strings.HasPrefix(phrase, prefix) {
+	for _, prefix := range index.aliases {
+		if strings.HasPrefix(phrase, prefix) {
 			phrase = strings.TrimPrefix(phrase, prefix)
 			break
 		}
@@ -75,20 +128,14 @@ func recordedVoiceForText(dir, text string) (recordedVoice, bool, error) {
 	if phrase == "" {
 		return recordedVoice{}, false, nil
 	}
-	var matched *recordedVoiceRule
-	for i := range pack.Rules {
-		for _, trigger := range pack.Rules[i].Triggers {
-			if normalizeVoicePhrase(trigger) == phrase {
-				if matched != nil && matched != &pack.Rules[i] {
-					return recordedVoice{}, false, fmt.Errorf("ambiguous recorded voice trigger")
-				}
-				matched = &pack.Rules[i]
-			}
-		}
-	}
-	if matched == nil {
+	rule, exists := index.rules[phrase]
+	if !exists {
 		return recordedVoice{}, false, nil
 	}
+	if rule < 0 {
+		return recordedVoice{}, false, fmt.Errorf("ambiguous recorded voice trigger")
+	}
+	matched := &pack.Rules[rule]
 	if matched.File == "" || filepath.Base(matched.File) != matched.File || strings.ContainsAny(matched.File, "/\\") || filepath.Ext(matched.File) != ".pcm" || strings.TrimSpace(matched.Reply) == "" {
 		return recordedVoice{}, false, fmt.Errorf("invalid recorded voice entry")
 	}
@@ -108,7 +155,7 @@ func recordedVoiceForText(dir, text string) (recordedVoice, bool, error) {
 	if err != nil || !stat.Mode().IsRegular() || stat.Size() == 0 || stat.Size()%2 != 0 || stat.Size() > serverSampleRate*2*15 {
 		return recordedVoice{}, false, fmt.Errorf("recorded voice must be valid PCM under 15 seconds")
 	}
-	data, err = os.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return recordedVoice{}, false, fmt.Errorf("recorded voice file could not be read")
 	}

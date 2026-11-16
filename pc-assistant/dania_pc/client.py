@@ -97,7 +97,6 @@ class Client:
                     task.cancel()
             await asyncio.gather(*(t for t in (reader, state_task) if t), return_exceptions=True)
             await self.dispatcher.stop()
-            self.connected = False
             self.write_state()
 
     async def run(self):

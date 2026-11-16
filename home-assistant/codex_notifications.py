@@ -36,15 +36,11 @@ class CompletionNotifier:
         temp=self.path.with_suffix('.tmp')
         temp.write_text(json.dumps(self.ledger),encoding='utf-8');os.replace(temp,self.path)
 
-    async def poll(self, status_path, ble_connected, play, now=None):
-        if not self.enabled or not ble_connected: return
+    async def poll(self, status, ble_connected, play, now=None):
+        if not self.enabled or not ble_connected or status is None: return
         now=int(time.time()*1000) if now is None else now
         try:
-            if status_path.stat().st_size>32768: return
-            status=json.loads(status_path.read_text(encoding='utf-8'))
-            if not isinstance(status,dict) or type(status.get('updated_at_ms')) is not int: return
-            age=now-status['updated_at_ms']
-            if status.get('version')!=1 or status.get('connected') is not True or status.get('dry_run') is not False or not 0<=age<=15000: return
+            if not status['connected'] or status['dry_run']: return
             tasks=status.get('codex_tasks',[])
             if not isinstance(tasks,list) or len(tasks)>20: return
             for task in tasks:

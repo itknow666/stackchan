@@ -3,6 +3,7 @@ import asyncio, json, logging, math, re, subprocess, time, wave, winsound
 from pathlib import Path
 import paho.mqtt.client as mqtt
 from bleak import BleakClient, BleakScanner
+from pc_state import read_pc_state
 
 BASE = Path(__file__).resolve().parent
 ROOT = BASE.parent
@@ -15,17 +16,11 @@ PC_ACTIONS={'open_app':'打开指定软件','open_project':'打开项目文件�
             'media':'媒体控制','search_web':'网页搜索','lock':'锁定电脑','codex_start':'交给 Codex 工作',
             'codex_status':'查询 Codex 任务','codex_cancel':'取消 Codex 任务'}
 
-def pc_status(path,now=None):
+def pc_status(raw):
     """Read only a bounded, credential-free projection of the companion state."""
     offline={'online':False,'mode':'未知','ready':False,'actions':'无','apps':'无','projects':'无'}
     try:
-        if path.stat().st_size>32768: return offline
-        raw=json.loads(path.read_text(encoding='utf-8'))
-        if not isinstance(raw,dict): return offline
-        now=time.time()*1000 if now is None else now
-        stamp=raw.get('updated_at_ms')
-        if (raw.get('version')!=1 or type(stamp)!=int or not 0<=now-stamp<=15000 or
-            type(raw.get('connected'))!=bool or type(raw.get('dry_run'))!=bool): return offline
+        if raw is None: return offline
         caps=raw.get('capabilities',{})
         if not isinstance(caps,dict): return offline
         actions=caps.get('actions',[])
@@ -43,7 +38,7 @@ def pc_status(path,now=None):
                 'ready':raw['connected'] and not raw['dry_run'] and bool(actions),
                 'actions':'、'.join(PC_ACTIONS[a] for a in actions) or '无',
                 'apps':names('apps'),'projects':names('projects')}
-    except (OSError,ValueError,TypeError): return offline
+    except (ValueError,TypeError): return offline
 FACES = {
     '默认': {'leftEye':{'weight':100,'rotation':0},'rightEye':{'weight':100,'rotation':0},'mouth':{'weight':0}},
     '微笑': {'leftEye':{'weight':72,'rotation':1550},'rightEye':{'weight':72,'rotation':-1550},'mouth':{'weight':35}},
@@ -395,7 +390,7 @@ class Bridge:
             await self.write('1',motion_payload(key,payload))
             self.publish(key,float(payload))
         elif key=='volume':
-            await self.volume_exchange(volume_value(payload))
+            volume=await self.volume_exchange(payload)
         elif key=='face':
             if payload not in FACES: raise ValueError('未知脸部形状')
             await self.write('2',FACES[payload]); self.publish(key,payload)
@@ -429,7 +424,7 @@ class Bridge:
         elif key=='voice_pack': result='达妮娅录音触发已'+('开启' if payload=='ON' else '关闭；恢复 DeepSeek 语音')
         elif key=='connect': result='蓝牙已连接；可同时使用 AI Agent 聊天与遥控'
         elif key=='disconnect': result='蓝牙已断开并暂停自动重连；AI Agent 聊天照常使用'
-        elif key=='volume': result='机器人音量已设为'+str(volume_value(payload))+'%'+('（静音）' if volume_value(payload)==0 else '')
+        elif key=='volume': result='机器人音量已设为'+str(volume)+'%'+('（静音）' if volume==0 else '')
         else: result='控制指令已发送，请在机器人上确认效果'
         self.publish('last_result',result)
 
@@ -475,13 +470,15 @@ class Bridge:
     async def poll_pc(self):
         config=self.cfg.get('pc_assistant',{})
         path=config.get('status_file') if isinstance(config,dict) else None
+        path=(BASE/Path(path)).resolve() if isinstance(path,str) and path else None
         while True:
             status={'online':False,'mode':'未配置','ready':False,'actions':'无','apps':'无','projects':'无'}
-            if isinstance(path,str) and path:
-                try: status=await asyncio.to_thread(pc_status,(BASE/Path(path)).resolve())
-                except (ValueError,OSError): pass
-            if self.codex_notifier and isinstance(path,str) and path:
-                await self.codex_notifier.poll((BASE/Path(path)).resolve(),
+            snapshot=None
+            if path:
+                snapshot=await asyncio.to_thread(read_pc_state,path)
+                status=pc_status(snapshot)
+            if self.codex_notifier:
+                await self.codex_notifier.poll(snapshot,
                     bool(self.client and self.client.is_connected),self.play_completion)
             self.publish('pc_online','ON' if status['online'] else 'OFF')
             self.publish('pc_ready','ON' if status['ready'] else 'OFF')

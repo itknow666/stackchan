@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import subprocess
 from urllib.parse import urlencode
 
 from .config import Config
+from .codex_tasks import CodexTasks
 
 
 def validate_action(config: Config, action, args):
@@ -25,7 +27,7 @@ def validate_action(config: Config, action, args):
         if not isinstance(task, str) or not 1 <= len(task.strip()) <= 4000 or any(ord(c) < 32 and c not in "\n\t" for c in task):
             raise ValueError("Codex task must contain one to four thousand characters")
     elif action in {"codex_status", "codex_cancel"}:
-        if not config.codex or not isinstance(args["task_id"], str) or (args["task_id"] != "latest" and not __import__("re").fullmatch(r"[a-f0-9]{32}", args["task_id"])):
+        if not config.codex or not isinstance(args["task_id"], str) or (args["task_id"] != "latest" and not re.fullmatch(r"[a-f0-9]{32}", args["task_id"])):
             raise ValueError("Invalid Codex task ID")
     elif action in {"open_app", "open_project"}:
         entries = config.apps if action == "open_app" else config.projects
@@ -49,7 +51,6 @@ class NativeExecutor:
 
     def __init__(self, config: Config):
         self.config = config
-        from .codex_tasks import CodexTasks
         self.codex_tasks = CodexTasks(config) if config.codex else None
 
     async def execute(self, action, args, before_effect=lambda: None):
